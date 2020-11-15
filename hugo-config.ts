@@ -8,7 +8,7 @@ import {
 export type HugoConfigurationIdentity = string;
 
 export interface HugoConfigurationSupplier {
-  readonly hugConfigFileName?: string;
+  readonly hugoConfigFileName?: string;
   readonly hugoConfig: HugoConfiguration;
 }
 
@@ -16,7 +16,7 @@ export function persistConfiguration(
   dir: string,
   hcs: HugoConfigurationSupplier,
 ): string {
-  const fileName = `${dir}/${hcs.hugConfigFileName || "config.toml"}`;
+  const fileName = `${dir}/${hcs.hugoConfigFileName || "config.toml"}`;
   const config = (hcs.hugoConfig as unknown) as Record<string, unknown>;
   let configText: string;
   switch (path.extname(fileName)) {
