@@ -1,10 +1,44 @@
-import { safety } from "./deps.ts";
+import {
+  encodingTOML as toml,
+  encodingYAML as yaml,
+  path,
+  safety,
+} from "./deps.ts";
 
 export type HugoConfigurationIdentity = string;
 
 export interface HugoConfigurationSupplier {
   readonly hugConfigFileName?: string;
   readonly hugoConfig: HugoConfiguration;
+}
+
+export function persistConfiguration(
+  dir: string,
+  hcs: HugoConfigurationSupplier,
+): string {
+  const fileName = `${dir}/${hcs.hugConfigFileName || "config.toml"}`;
+  const config = (hcs.hugoConfig as unknown) as Record<string, unknown>;
+  let configText: string;
+  switch (path.extname(fileName)) {
+    case ".json":
+      configText = JSON.stringify(hcs.hugoConfig);
+      break;
+
+    case ".toml":
+      configText = toml.stringify(config);
+      break;
+
+    case ".yaml":
+    case ".yml":
+      configText = toml.stringify(config);
+      break;
+
+    default:
+      configText =
+        "Unable to determined type from extension: ${path.extname(fileName)}";
+  }
+  Deno.writeTextFileSync(fileName, configText);
+  return fileName;
 }
 
 export interface HugoConfigurator {

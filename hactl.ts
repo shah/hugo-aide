@@ -78,8 +78,17 @@ export async function configureHandler(
 ): Promise<true | void> {
   const { "configure": configure, "<hc-supplier-name>": hcSupplierName } =
     ctx.cliOptions;
-  if (configure && hcSupplierName) {
+  if (configure && typeof hcSupplierName === "string") {
     await ctx.registerModules();
+    configurators.forEach((c) => {
+      const supplier = c.configure(hcSupplierName);
+      if (supplier) {
+        const fileName = hc.persistConfiguration(".", supplier);
+        if (ctx.isVerbose) {
+          console.log(fileName);
+        }
+      }
+    });
     return true;
   }
 }
