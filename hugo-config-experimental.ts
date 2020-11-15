@@ -1,7 +1,7 @@
 import * as hc from "./hugo-config.ts";
 
 export const prime: hc.HugoConfigurationSupplier = {
-  hugConfigFileName: "experimental.toml",
+  hugoConfigFileName: "experimental.toml",
   hugoConfig: {
     baseURL: "//experimental.site",
     title: "Experimental Configuration",

@@ -18,7 +18,7 @@ const docoptSpec = `
 Hugo Aide Controller ${hactlVersion}.
 
 Usage:
-  hactl configure <hc-supplier-name> --module=<module.ts>... [--verbose]
+  hactl configure <hc-supplier-name> --module=<module.ts>... [--path=<dest-path>] [--verbose]
   hactl inspect hc-supplier-names --module=<module.ts>...
   hactl -h | --help
   hactl --version
@@ -27,6 +27,7 @@ Options:
   -h --help             Show this screen
   <module.ts>           A Hugo Configurator TypeScript module
   <hc-supplier-name>    A Hugo Configuration supplier name
+  <dest-path>           The destination path for the output
   --version             Show version
   --verbose             Be explicit about what's going on
 `;
@@ -76,14 +77,19 @@ export class CommandHandlerContext implements CommandHandlerContext {
 export async function configureHandler(
   ctx: CommandHandlerContext,
 ): Promise<true | void> {
-  const { "configure": configure, "<hc-supplier-name>": hcSupplierName } =
-    ctx.cliOptions;
+  const {
+    "configure": configure,
+    "<hc-supplier-name>": hcSupplierName,
+    "--path": destPath,
+  } = ctx.cliOptions;
   if (configure && typeof hcSupplierName === "string") {
-    await ctx.registerModules();
     configurators.forEach((c) => {
       const supplier = c.configure(hcSupplierName);
       if (supplier) {
-        const fileName = hc.persistConfiguration(".", supplier);
+        const fileName = hc.persistConfiguration(
+          typeof destPath === "string" ? destPath : ".",
+          supplier,
+        );
         if (ctx.isVerbose) {
           console.log(fileName);
         }
@@ -99,13 +105,12 @@ export async function inspectHandler(
   const { "inspect": inspect, "hc-supplier-names": hcSupplierNames } =
     ctx.cliOptions;
   if (inspect && hcSupplierNames) {
-    await ctx.registerModules();
     configurators.forEach((hc) => {
       hc.identities().forEach((i) => {
         const c = hc.configure(i);
         console.log(
           `${colors.green(hc.name)}: ${colors.yellow(i)}, ${
-            colors.blue(c?.hugConfigFileName || "<no name>")
+            colors.blue(c?.hugoConfigFileName || "<no name>")
           }`,
         );
       });
@@ -136,6 +141,7 @@ export async function CLI<
   try {
     const options = docopt.default(docoptSpec);
     const context = prepareContext(options);
+    await context.registerModules();
     let handled: true | void;
     for (const handler of handlers) {
       handled = await handler(context);
