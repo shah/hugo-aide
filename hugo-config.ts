@@ -75,7 +75,7 @@ export interface HugoConfiguration {
   module?: HugoConfigModule;
   outputFormats?: HugoConfigOutputFormats;
   outputs?: HugoConfigOutputs;
-  params?: Record<string, unknown>;
+  params?: HugoConfigParams;
   permalinks?: HugoConfigPermalinks;
   sitemap?: HugoConfigSitemap;
   taxonomies?: HugoConfigTaxonomies;
@@ -253,6 +253,9 @@ export interface HugoConfigDefaultOutputs {
 
 export type HugoConfigPermalinkSpec = string;
 export type HugoConfigPermalinks = Record<string, HugoConfigPermalinkSpec>;
+
+export type HugoConfigParamsKey = string;
+export type HugoConfigParams = Record<HugoConfigParamsKey, unknown>;
 
 export interface HugoConfigSitemap {
   changeFreq?: string;
