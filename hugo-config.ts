@@ -30,7 +30,7 @@ export function persistConfiguration(
 
     case ".yaml":
     case ".yml":
-      configText = toml.stringify(config);
+      configText = yaml.stringify(config);
       break;
 
     default:
