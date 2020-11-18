@@ -15,6 +15,7 @@ export interface HugoConfigurationSupplier {
 export function persistConfiguration(
   dir: string,
   hcs: HugoConfigurationSupplier,
+  dryRun?: boolean,
 ): string {
   const fileName = `${dir}/${hcs.hugoConfigFileName || "config.toml"}`;
   const config = (hcs.hugoConfig as unknown) as Record<string, unknown>;
@@ -37,7 +38,7 @@ export function persistConfiguration(
       configText =
         "Unable to determined type from extension: ${path.extname(fileName)}";
   }
-  Deno.writeTextFileSync(fileName, configText);
+  if (!dryRun) Deno.writeTextFileSync(fileName, configText);
   return fileName;
 }
 
