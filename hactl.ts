@@ -6,7 +6,7 @@ import {
 } from "./deps.ts";
 import * as hc from "./hugo-config.ts";
 
-export async function determineVersion(importMetaURL: string): Promise<string> {
+export function determineVersion(importMetaURL: string): Promise<string> {
   return gsv.determineVersionFromRepoTag(
     importMetaURL,
     { repoIdentity: "shah/hugo-aide" },
