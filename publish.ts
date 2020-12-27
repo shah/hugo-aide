@@ -147,7 +147,7 @@ export class PublishCommandHandlerContext {
           // we're importing are local to the calling pubctl.ts in the project
           // so we need to use absolute paths
           const module = await import(
-            path.toFileUrl(path.join(this.projectHome, we.path)).toString()
+            path.toFileUrl(we.path).toString()
           );
           if (this.isDryRun || this.isVerbose) {
             console.log(
