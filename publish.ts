@@ -107,7 +107,7 @@ export class PublishCommandHandlerContext {
     return cmd;
   }
 
-  getPrepareBuildSubmodules(): string[] {
+  getPrepareBuildSubmoduleRelNames(): string[] {
     const result = [];
     for (const we of fs.expandGlobSync(this.buildLifecyleHandlerGlob)) {
       if (we.isFile) {
@@ -125,7 +125,7 @@ export class PublishCommandHandlerContext {
    * 
    * Here's what an example hook looks like:
    * ---------------------------------------
-   * import * as haPublish from "../../../../../github.com/shah/hugo-aide/publish.ts";
+   * import * as haPublish from "https://denopkg.com/shah/hugo-aide@v0.2.0/publish.ts";
    * export async function buildHook(
    *   ctx: haPublish.PublishCommandHandlerContext,
    *   step: haPublish.BuildLifecycleStep,
@@ -135,7 +135,7 @@ export class PublishCommandHandlerContext {
    * export default buildHook;
    * @param step The build lifecylce being executed
    */
-  async handleBuildHooks(
+  async handleProjectBuildHooks(
     step: BuildLifecycleStep,
   ): Promise<string[]> {
     const result = [];
@@ -143,7 +143,12 @@ export class PublishCommandHandlerContext {
       if (we.isFile) {
         const prepModuleName = path.relative(this.projectHome, we.path);
         try {
-          const module = await import(we.path);
+          // the hugo-aide package is going to be URL-imported but the files
+          // we're importing are local to the calling pubctl.ts in the project
+          // so we need to use absolute paths
+          const module = await import(
+            path.toFileUrl(path.join(this.projectHome, we.path)).toString()
+          );
           if (this.isDryRun || this.isVerbose) {
             console.log(
               step,
@@ -183,7 +188,7 @@ export class PublishCommandHandlerContext {
   }
 
   async prepareBuild(): Promise<string[]> {
-    return await this.handleBuildHooks(
+    return await this.handleProjectBuildHooks(
       BuildLifecycleStep.PREPARE,
     );
   }
@@ -201,7 +206,7 @@ export class PublishCommandHandlerContext {
   }
 
   async finalizeBuild() {
-    await this.handleBuildHooks(
+    await this.handleProjectBuildHooks(
       BuildLifecycleStep.FINALIZE,
     );
   }
@@ -233,7 +238,7 @@ export class PublishCommandHandlerContext {
    */
   async update() {
     const updatePkgs = this.reportShellCmd(
-      `udd pubctl.ts ${this.getPrepareBuildSubmodules().join(" ")}`,
+      `udd pubctl.ts ${this.getPrepareBuildSubmoduleRelNames().join(" ")}`,
     );
     await shell.runShellCommand(updatePkgs, {
       ...(this.isVerbose
