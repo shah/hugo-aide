@@ -45,6 +45,7 @@ export function defaultDocoptSpec(
 Publication Controller ${version}.
 
 Usage:
+  pubctl inspect hooks
   pubctl prepare-build [--project] [--build-hooks] [--dry-run] [--verbose]
   pubctl build [--project] [--build-hooks] [--dry-run] [--verbose]
   pubctl clean [--dry-run] [--verbose]
@@ -68,6 +69,7 @@ export interface PublishCommandHandler<T extends PublishCommandHandlerContext> {
 export enum BuildLifecycleStep {
   PREPARE = "prepare",
   FINALIZE = "finalize",
+  INSPECT = "inspect",
 }
 
 export interface BuildLifecycleHandler<T extends PublishCommandHandlerContext> {
@@ -107,7 +109,44 @@ export class PublishCommandHandlerContext {
     return cmd;
   }
 
-  getPrepareBuildSubmoduleRelNames(): string[] {
+  async inspectHooks(): Promise<void> {
+    for (const we of fs.expandGlobSync(this.buildLifecyleHandlerGlob)) {
+      if (we.isFile) {
+        const prepModuleName = path.relative(this.projectHome, we.path);
+        try {
+          // the hugo-aide package is going to be URL-imported but the files
+          // we're importing are local to the calling pubctl.ts in the project
+          // so we need to use absolute paths
+          const module = await import(
+            path.toFileUrl(we.path).toString()
+          );
+          if (module) {
+            if (typeof module.default === "function") {
+              console.log(
+                colors.yellow(prepModuleName),
+                colors.green("valid"),
+              );
+            } else {
+              console.log(
+                colors.yellow(prepModuleName),
+                colors.brightRed(`invalid: does not have a default function`),
+              );
+            }
+          } else {
+            console.log(
+              colors.yellow(prepModuleName),
+              colors.brightRed(`invalid: unable to import module`),
+            );
+          }
+        } catch (err) {
+          console.log(colors.brightRed(prepModuleName));
+          console.log(err);
+        }
+      }
+    }
+  }
+
+  getBuildHookModuleRelNames(): string[] {
     const result = [];
     for (const we of fs.expandGlobSync(this.buildLifecyleHandlerGlob)) {
       if (we.isFile) {
@@ -238,7 +277,7 @@ export class PublishCommandHandlerContext {
    */
   async update() {
     const updatePkgs = this.reportShellCmd(
-      `udd pubctl.ts ${this.getPrepareBuildSubmoduleRelNames().join(" ")}`,
+      `udd pubctl.ts ${this.getBuildHookModuleRelNames().join(" ")}`,
     );
     await shell.runShellCommand(updatePkgs, {
       ...(this.isVerbose
@@ -246,6 +285,16 @@ export class PublishCommandHandlerContext {
         : shell.quietShellOutputOptions),
       dryRun: this.isDryRun,
     });
+  }
+}
+
+export async function inspectHandler(
+  ctx: PublishCommandHandlerContext,
+): Promise<true | void> {
+  const { "inspect": inspect, "hooks": hooks } = ctx.cliOptions;
+  if (inspect && hooks) {
+    await ctx.inspectHooks();
+    return true;
   }
 }
 
@@ -305,6 +354,7 @@ export async function versionHandler(
 }
 
 export const commonHandlers = [
+  inspectHandler,
   prepareBuildHandler,
   buildHandler,
   cleanHandler,
