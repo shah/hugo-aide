@@ -137,11 +137,20 @@ export class PublishCommandHandlerContext {
           );
           if (module) {
             if (typeof module.default === "function") {
+              const isAsync =
+                module.default.constructor.name === "AsyncFunction";
               console.log(
                 colors.yellow(prepModuleName),
                 colors.green("valid"),
+                isAsync
+                  ? colors.brightBlue("async")
+                  : colors.brightBlue("sync"),
               );
-              module.default(this, BuildLifecycleStep.INSPECT);
+              if (isAsync) {
+                await module.default(this, BuildLifecycleStep.INSPECT);
+              } else {
+                module.default(this, BuildLifecycleStep.INSPECT);
+              }
             } else {
               console.log(
                 colors.yellow(prepModuleName),
@@ -216,7 +225,12 @@ export class PublishCommandHandlerContext {
               const handler = module.default as BuildLifecycleHandler<
                 PublishCommandHandlerContext
               >;
-              handler(this, step);
+              const isAsync = handler.constructor.name === "AsyncFunction";
+              if (isAsync) {
+                await handler(this, step);
+              } else {
+                handler(this, step);
+              }
               if (this.isVerbose) {
                 console.log(
                   step,
