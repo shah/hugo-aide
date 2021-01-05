@@ -46,7 +46,7 @@ Publication Controller ${version}.
 
 Usage:
   pubctl inspect hooks
-  pubctl lint
+  pubctl lint [--cli-suggestions]
   pubctl prepare-build [--project] [--build-hooks] [--dry-run] [--verbose]
   pubctl build [--project] [--build-hooks] [--dry-run] [--verbose]
   pubctl clean [--dry-run] [--verbose]
@@ -310,8 +310,8 @@ export class PublishCommandHandlerContext {
     const result: PublishLintResults = {
       fileNameIssues: [],
     };
-    for (const we of fs.walkSync(root)) {
-      const dirName = path.dirname(we.path);
+    for (const we of fs.walkSync(root, { skip: [/\.git/, /README.md/] })) {
+      const dirName = path.relative(this.projectHome, path.dirname(we.path));
       let issue: PublishLintFileNameIssue;
       const addIssue = (suggestedCmd: string, diagnostic: string) => {
         if (!issue) {
@@ -328,15 +328,14 @@ export class PublishCommandHandlerContext {
 
       if (we.name.includes(" ")) {
         addIssue(
-          `(cd ${dirName}; mv "${we.name}" ${this.suggestFileName(we.path)})`,
+          `(cd ${dirName}; mv "${we.name}" ${this.suggestFileName(we.name)})`,
           `should be renamed because it has spaces (replace all spaces with hyphens '-')`,
         );
       }
 
-      const lowerCaseName = we.name.toLocaleLowerCase();
-      if (we.name != lowerCaseName) {
+      if (we.name != we.name.toLocaleLowerCase()) {
         addIssue(
-          `(cd ${dirName}; mv "${we.name}" ${lowerCaseName})`,
+          `(cd ${dirName}; mv "${we.name}" ${this.suggestFileName(we.name)})`,
           `should be renamed because it has mixed case letters (all text should be lowercase only)`,
         );
       }
@@ -359,15 +358,26 @@ export async function inspectHandler(
 export async function lintHandler(
   ctx: PublishCommandHandlerContext,
 ): Promise<true | void> {
-  const { "lint": lint } = ctx.cliOptions;
+  const { "lint": lint, "--cli-suggestions": cliSuggestions } = ctx.cliOptions;
   if (lint) {
     const results = ctx.lint(ctx.projectHome);
-    for (const fni of results.fileNameIssues) {
-      console.log(`${colors.yellow(fni.file.path)}:`);
-      for (const diag of fni.diagnostics) {
-        console.log(`  ${colors.red(diag.diagnostic)}`);
-        if (diag.correctionLinuxCmd) {
-          console.log(`  ${colors.green(diag.correctionLinuxCmd)}`);
+    if (cliSuggestions) {
+      for (const fni of results.fileNameIssues) {
+        for (const diag of fni.diagnostics) {
+          if (diag.correctionLinuxCmd) {
+            console.log(diag.correctionLinuxCmd);
+          }
+        }
+      }
+    } else {
+      for (const fni of results.fileNameIssues) {
+        const relPath = path.relative(ctx.projectHome, fni.file.path);
+        console.log(`${colors.yellow(relPath)}:`);
+        for (const diag of fni.diagnostics) {
+          console.log(`    ${colors.red(diag.diagnostic)}`);
+          if (diag.correctionLinuxCmd) {
+            console.log(`    ${colors.green(diag.correctionLinuxCmd)}`);
+          }
         }
       }
     }
