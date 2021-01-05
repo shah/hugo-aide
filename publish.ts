@@ -46,6 +46,7 @@ Publication Controller ${version}.
 
 Usage:
   pubctl inspect hooks
+  pubctl lint
   pubctl prepare-build [--project] [--build-hooks] [--dry-run] [--verbose]
   pubctl build [--project] [--build-hooks] [--dry-run] [--verbose]
   pubctl clean [--dry-run] [--verbose]
@@ -74,6 +75,20 @@ export enum BuildLifecycleStep {
 
 export interface BuildLifecycleHandler<T extends PublishCommandHandlerContext> {
   (ctx: T, step: BuildLifecycleStep): Promise<true | void>;
+}
+
+export interface PublishLintFileNameIssueDiagnostic {
+  readonly diagnostic: string;
+  readonly correctionLinuxCmd?: string;
+}
+
+export interface PublishLintFileNameIssue {
+  readonly file: fs.WalkEntry;
+  readonly diagnostics: PublishLintFileNameIssueDiagnostic[];
+}
+
+export interface PublishLintResults {
+  readonly fileNameIssues: PublishLintFileNameIssue[];
 }
 
 export class PublishCommandHandlerContext {
@@ -286,6 +301,48 @@ export class PublishCommandHandlerContext {
       dryRun: this.isDryRun,
     });
   }
+
+  suggestFileName(source: string): string {
+    return source.trim().replaceAll(/ +/g, "-").toLocaleLowerCase();
+  }
+
+  lint(root: string): PublishLintResults {
+    const result: PublishLintResults = {
+      fileNameIssues: [],
+    };
+    for (const we of fs.walkSync(root)) {
+      const dirName = path.dirname(we.path);
+      let issue: PublishLintFileNameIssue;
+      const addIssue = (suggestedCmd: string, diagnostic: string) => {
+        if (!issue) {
+          issue = {
+            file: we,
+            diagnostics: [],
+          };
+          result.fileNameIssues.push(issue);
+        }
+        issue.diagnostics.push(
+          { diagnostic: diagnostic, correctionLinuxCmd: suggestedCmd },
+        );
+      };
+
+      if (we.name.includes(" ")) {
+        addIssue(
+          `(cd ${dirName}; mv "${we.name}" ${this.suggestFileName(we.path)})`,
+          `should be renamed because it has spaces (replace all spaces with hyphens '-')`,
+        );
+      }
+
+      const lowerCaseName = we.name.toLocaleLowerCase();
+      if (we.name != lowerCaseName) {
+        addIssue(
+          `(cd ${dirName}; mv "${we.name}" ${lowerCaseName})`,
+          `should be renamed because it has mixed case letters (all text should be lowercase only)`,
+        );
+      }
+    }
+    return result;
+  }
 }
 
 export async function inspectHandler(
@@ -294,6 +351,26 @@ export async function inspectHandler(
   const { "inspect": inspect, "hooks": hooks } = ctx.cliOptions;
   if (inspect && hooks) {
     await ctx.inspectHooks();
+    return true;
+  }
+}
+
+// deno-lint-ignore require-await
+export async function lintHandler(
+  ctx: PublishCommandHandlerContext,
+): Promise<true | void> {
+  const { "lint": lint } = ctx.cliOptions;
+  if (lint) {
+    const results = ctx.lint(ctx.projectHome);
+    for (const fni of results.fileNameIssues) {
+      console.log(`${colors.yellow(fni.file.path)}:`);
+      for (const diag of fni.diagnostics) {
+        console.log(`  ${colors.red(diag.diagnostic)}`);
+        if (diag.correctionLinuxCmd) {
+          console.log(`  ${colors.green(diag.correctionLinuxCmd)}`);
+        }
+      }
+    }
     return true;
   }
 }
@@ -355,6 +432,7 @@ export async function versionHandler(
 
 export const commonHandlers = [
   inspectHandler,
+  lintHandler,
   prepareBuildHandler,
   buildHandler,
   cleanHandler,
