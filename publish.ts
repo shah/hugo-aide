@@ -56,7 +56,7 @@ Usage:
 
 Options:
   --project        The project's home directory (default Deno.cwd())
-  --build-hooks    Deno "prepare-build" modules which will be found and executed (default "**/*/pubctl-hook-build.ts")
+  --build-hooks    Deno "prepare-build" modules which will be found and executed (default "**/*/*.hook-publ.ts")
   --dry-run        Show what will be done (but don't actually do it)
   --verbose        Be explicit about what's going on
   -h --help        Show this screen
@@ -112,7 +112,7 @@ export class PublishCommandHandlerContext {
       : (chsOptions.projectHome || Deno.cwd());
     this.buildLifecyleHandlerGlob = prepBuildGlob
       ? prepBuildGlob as string
-      : "**/*/pubctl-hook-build.ts";
+      : "**/*/*.hook-pubctl.ts";
     this.isDryRun = dryRun ? true : false;
     this.isVerbose = this.isDryRun || (verbose ? true : false);
   }
@@ -141,6 +141,7 @@ export class PublishCommandHandlerContext {
                 colors.yellow(prepModuleName),
                 colors.green("valid"),
               );
+              module.default(this, BuildLifecycleStep.INSPECT);
             } else {
               console.log(
                 colors.yellow(prepModuleName),
@@ -179,7 +180,7 @@ export class PublishCommandHandlerContext {
    * 
    * Here's what an example hook looks like:
    * ---------------------------------------
-   * import * as haPublish from "https://denopkg.com/shah/hugo-aide@v0.2.0/publish.ts";
+   * import * as haPublish from "https://denopkg.com/shah/hugo-aide@v0.2.5/publish.ts";
    * export async function buildHook(
    *   ctx: haPublish.PublishCommandHandlerContext,
    *   step: haPublish.BuildLifecycleStep,
