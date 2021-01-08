@@ -45,21 +45,24 @@ export function defaultDocoptSpec(
 Publication Controller ${version}.
 
 Usage:
-  pubctl inspect hooks [--validate] [--dry-run] [--verbose]
-  pubctl lint [--cli-suggestions]
-  pubctl prepare-build [--project] [--build-hooks] [--dry-run] [--verbose]
-  pubctl build [--project] [--build-hooks] [--dry-run] [--verbose]
-  pubctl clean [--dry-run] [--verbose]
-  pubctl update [--dry-run] [--verbose]
+  pubctl validate hooks [--project=<path>] [--hooks=<glob>]... [--dry-run] [--verbose]
+  pubctl inspect [--project=<path>] [--hooks=<glob>]...
+  pubctl lint [--project=<path>] [--cli-suggestions] [--hooks=<glob>]...
+  pubctl build (prepare|finalize) [--schedule=<cronSpec>] [--project=<path>] [--hooks=<glob>]... [--dry-run] [--verbose]
+  pubctl generate assets [--schedule=<cronSpec>] [--project=<path>] [--hooks=<glob>]... [--dry-run] [--verbose]
+  pubctl clean [--project=<path>] [--hooks=<glob>]... [--dry-run] [--verbose]
+  pubctl doctor [--project=<path>] [--hooks=<glob>]...
+  pubctl update [--project=<path>] [--hooks=<glob>]... [--dry-run] [--verbose]
   pubctl version
   pubctl -h | --help
 
 Options:
-  --project        The project's home directory (default Deno.cwd())
-  --build-hooks    Deno "prepare-build" modules which will be found and executed (default "**/*/*.hook-publ.*")
-  --dry-run        Show what will be done (but don't actually do it)
-  --verbose        Be explicit about what's going on
-  -h --help        Show this screen
+  --schedule=CRONSPEC    Cron spec for schedule [default: * * * * *]
+  --project=PATH         The project's home directory, defaults to current directory
+  --hooks=GLOB           Glob of hooks which will be found and executed [default: **/*/*.hook-pubctl.*]
+  --dry-run              Show what will be done (but don't actually do it) [default: false]
+  --verbose              Be explicit about what's going on [default: false]
+  -h --help              Show this screen
 `;
 }
 
@@ -68,9 +71,14 @@ export interface PublishCommandHandler<T extends PublishCommandHandlerContext> {
 }
 
 export enum BuildLifecycleStep {
-  PREPARE = "prepare",
-  FINALIZE = "finalize",
+  DOCTOR = "doctor",
+  LINT = "lint",
+  BUILD_PREPARE = "build-prepare",
+  BUILD_FINALIZE = "build-finalize",
   INSPECT = "inspect",
+  GENERATE = "generate-assets",
+  CLEAN = "clean",
+  UPDATE = "update",
 }
 
 export interface BuildLifecycleHandler<T extends PublishCommandHandlerContext> {
@@ -93,7 +101,8 @@ export interface PublishLintResults {
 
 export class PublishCommandHandlerContext {
   readonly projectHome: string;
-  readonly buildLifecyleHandlerGlob: string;
+  readonly hooksGlobs: string[];
+  readonly schedule?: string;
   readonly isVerbose: boolean;
   readonly isDryRun: boolean;
 
@@ -103,16 +112,16 @@ export class PublishCommandHandlerContext {
   ) {
     const {
       "--project": projectHome,
-      "--build-hooks": prepBuildGlob,
+      "--hooks": hooksGlob,
       "--verbose": verbose,
       "--dry-run": dryRun,
+      "--schedule": schedule,
     } = this.cliOptions;
     this.projectHome = projectHome
       ? projectHome as string
       : (chsOptions.projectHome || Deno.cwd());
-    this.buildLifecyleHandlerGlob = prepBuildGlob
-      ? prepBuildGlob as string
-      : "**/*/*.hook-pubctl.*";
+    this.hooksGlobs = hooksGlob as string[];
+    this.schedule = schedule ? schedule.toString() : undefined;
     this.isDryRun = dryRun ? true : false;
     this.isVerbose = this.isDryRun || (verbose ? true : false);
   }
@@ -137,7 +146,7 @@ export class PublishCommandHandlerContext {
     step?: BuildLifecycleStep,
   ): Record<string, string> {
     const hookHome = path.dirname(hookAbsPath);
-    return {
+    const result: Record<string, string> = {
       PUBCTLHOOK_LIFECYLE_STEP: step || "validate",
       PUBCTLHOOK_VERBOSE: this.isVerbose ? "1" : "0",
       PUBCTLHOOK_DRY_RUN: this.isDryRun ? "1" : "0",
@@ -148,67 +157,72 @@ export class PublishCommandHandlerContext {
       PUBCTLHOOK_PROJECT_HOME_REL: path.relative(hookHome, this.projectHome),
       PUBCTLHOOK_CALL: JSON.stringify(this.cliOptions),
     };
+    if (this.schedule) result.PUBCTLHOOK_SCHEDULE = this.schedule;
+    return result;
   }
 
   async validateHooks(): Promise<void> {
-    for (const we of fs.expandGlobSync(this.buildLifecyleHandlerGlob)) {
-      if (we.isFile) {
-        const prepModuleName = path.relative(this.projectHome, we.path);
+    for (const glob of this.hooksGlobs) {
+      console.log(`Hooks with glob '${colors.brightCyan(glob)}':`);
+      for (const we of fs.expandGlobSync(glob)) {
+        if (we.isFile) {
+          const prepModuleName = path.relative(this.projectHome, we.path);
 
-        if (path.extname(we.name) != ".ts") {
-          if (this.isExecutable(we.path)) {
-            console.log(
-              colors.yellow(prepModuleName),
-              colors.green("executable"),
-              colors.blue("will be called with environment variables"),
-              this.subprocessEnvVars(we.path),
-            );
-          } else {
-            console.log(
-              colors.yellow(prepModuleName),
-              colors.brightRed("not executable"),
-            );
-          }
-          continue;
-        }
-
-        try {
-          // the hugo-aide package is going to be URL-imported but the files
-          // we're importing are local to the calling pubctl.ts in the project
-          // so we need to use absolute paths
-          const module = await import(
-            path.toFileUrl(we.path).toString()
-          );
-          if (module) {
-            if (typeof module.default === "function") {
-              const isAsync =
-                module.default.constructor.name === "AsyncFunction";
+          if (path.extname(we.name) != ".ts") {
+            if (this.isExecutable(we.path)) {
               console.log(
                 colors.yellow(prepModuleName),
-                colors.green("TypeScript valid Deno hook"),
-                isAsync
-                  ? colors.brightBlue("async")
-                  : colors.brightBlue("sync"),
+                colors.green("executable"),
+                colors.blue("will be called with environment variables"),
+                this.subprocessEnvVars(we.path),
               );
             } else {
               console.log(
                 colors.yellow(prepModuleName),
+                colors.brightRed("not executable"),
+              );
+            }
+            continue;
+          }
+
+          try {
+            // the hugo-aide package is going to be URL-imported but the files
+            // we're importing are local to the calling pubctl.ts in the project
+            // so we need to use absolute paths
+            const module = await import(
+              path.toFileUrl(we.path).toString()
+            );
+            if (module) {
+              if (typeof module.default === "function") {
+                const isAsync =
+                  module.default.constructor.name === "AsyncFunction";
+                console.log(
+                  colors.yellow(prepModuleName),
+                  colors.green("TypeScript valid Deno hook"),
+                  isAsync
+                    ? colors.brightBlue("async")
+                    : colors.brightBlue("sync"),
+                );
+              } else {
+                console.log(
+                  colors.yellow(prepModuleName),
+                  colors.brightRed(
+                    `invalid TypeScript Deno hook: does not have a default function`,
+                  ),
+                );
+              }
+            } else {
+              console.log(
+                colors.yellow(prepModuleName),
                 colors.brightRed(
-                  `invalid TypeScript Deno hook: does not have a default function`,
+                  `invalid TypeScript Deno hook: unable to import module`,
                 ),
               );
             }
-          } else {
-            console.log(
-              colors.yellow(prepModuleName),
-              colors.brightRed(
-                `invalid TypeScript Deno hook: unable to import module`,
-              ),
-            );
+          } catch (err) {
+            console.log(colors.brightRed(prepModuleName));
+            console.log(err);
           }
-        } catch (err) {
-          console.log(colors.brightRed(prepModuleName));
-          console.log(err);
         }
       }
     }
@@ -216,10 +230,12 @@ export class PublishCommandHandlerContext {
 
   getBuildHookModuleRelNames(): string[] {
     const result = [];
-    for (const we of fs.expandGlobSync(this.buildLifecyleHandlerGlob)) {
-      if (we.isFile) {
-        const prepModuleName = path.relative(this.projectHome, we.path);
-        result.push(prepModuleName);
+    for (const glob of this.hooksGlobs) {
+      for (const we of fs.expandGlobSync(glob)) {
+        if (we.isFile) {
+          const prepModuleName = path.relative(this.projectHome, we.path);
+          result.push(prepModuleName);
+        }
       }
     }
     return result;
@@ -230,13 +246,13 @@ export class PublishCommandHandlerContext {
    * or Deno modules that are dynamically imported and then "executed" by 
    * calling the default function.
    * 
-   * Here's what an example hook looks like:
-   * ---------------------------------------
+   * Here's what an example hook looks like in Deno TypeScript:
+   * ---------------------------------------------------------
    * import * as haPublish from "https://denopkg.com/shah/hugo-aide@v0.2.5/publish.ts";
    * export async function buildHook(
    *   ctx: haPublish.PublishCommandHandlerContext,
    *   step: haPublish.BuildLifecycleStep,
-   * ): Promise<true | void> {
+   * ): Promise<false | number | void> {
    *   console.log(step, "in", import.meta.url, ctx);
    * }
    * export default buildHook;
@@ -246,81 +262,91 @@ export class PublishCommandHandlerContext {
     step: BuildLifecycleStep,
   ): Promise<string[]> {
     const result = [];
-    for (const we of fs.expandGlobSync(this.buildLifecyleHandlerGlob)) {
-      if (we.isFile) {
-        const prepModuleName = path.relative(this.projectHome, we.path);
+    for (const glob of this.hooksGlobs) {
+      for (const we of fs.expandGlobSync(glob)) {
+        if (we.isFile) {
+          const prepModuleName = path.relative(this.projectHome, we.path);
 
-        if (path.extname(we.name) != ".ts") {
-          if (this.isExecutable(we.path)) {
-            await shell.runShellCommand(
-              {
-                cmd: [
-                  "/bin/sh",
-                  "-c",
-                  ...shell.commandComponents(we.path),
-                ],
-                cwd: path.dirname(we.path),
-                env: this.subprocessEnvVars(we.path, step),
-              },
-              {
-                // the subprocess is responsible for checking verbose/dry-run
-                ...shell.cliVerboseShellOutputOptions,
-              },
-            );
-          } else {
-            console.log(
-              colors.yellow(prepModuleName),
-              colors.brightRed("not executable"),
-            );
-          }
-          continue;
-        }
+          if (path.extname(we.name) != ".ts") {
+            if (this.isExecutable(we.path)) {
+              const blockHeader =
+                (): shell.CliVerboseShellBlockHeaderResult => {
+                  return {
+                    headerText: `${prepModuleName}`,
+                    separatorText: "",
+                  };
+                };
 
-        try {
-          // the hugo-aide package is going to be URL-imported but the files
-          // we're importing are local to the calling pubctl.ts in the project
-          // so we need to use absolute paths
-          const module = await import(
-            path.toFileUrl(we.path).toString()
-          );
-          if (this.isDryRun || this.isVerbose) {
-            console.log(
-              step,
-              colors.yellow(prepModuleName),
-              module ? colors.green("imported") : colors.red("not imported"),
-            );
-          }
-          if (!this.isDryRun) {
-            if (typeof module.default === "function") {
-              const handler = module.default as BuildLifecycleHandler<
-                PublishCommandHandlerContext
-              >;
-              const isAsync = handler.constructor.name === "AsyncFunction";
-              if (isAsync) {
-                await handler(this, step);
-              } else {
-                handler(this, step);
-              }
-              if (this.isVerbose) {
-                console.log(
-                  step,
-                  colors.yellow(prepModuleName),
-                  colors.green("executed"),
-                );
-              }
+              await shell.runShellCommand(
+                {
+                  cmd: [
+                    "/bin/sh",
+                    "-c",
+                    ...shell.commandComponents(we.path),
+                  ],
+                  cwd: path.dirname(we.path),
+                  env: this.subprocessEnvVars(we.path, step),
+                },
+                {
+                  // the subprocess is responsible for checking verbose/dry-run
+                  ...shell.cliVerboseShellBlockOutputOptions(blockHeader),
+                },
+              );
             } else {
               console.log(
-                colors.brightRed(
-                  `${prepModuleName} does not have a default function`,
-                ),
+                colors.yellow(prepModuleName),
+                colors.brightRed("not executable"),
               );
             }
+            continue;
           }
-        } catch (err) {
-          console.log(colors.brightRed(prepModuleName));
-          console.log(err);
+
+          try {
+            // the hugo-aide package is going to be URL-imported but the files
+            // we're importing are local to the calling pubctl.ts in the project
+            // so we need to use absolute paths
+            const module = await import(
+              path.toFileUrl(we.path).toString()
+            );
+            if (this.isDryRun || this.isVerbose) {
+              console.log(
+                step,
+                colors.yellow(prepModuleName),
+                module ? colors.green("imported") : colors.red("not imported"),
+              );
+            }
+            if (!this.isDryRun) {
+              if (typeof module.default === "function") {
+                const handler = module.default as BuildLifecycleHandler<
+                  PublishCommandHandlerContext
+                >;
+                const isAsync = handler.constructor.name === "AsyncFunction";
+                if (isAsync) {
+                  await handler(this, step);
+                } else {
+                  handler(this, step);
+                }
+                if (this.isVerbose) {
+                  console.log(
+                    step,
+                    colors.yellow(prepModuleName),
+                    colors.green("executed"),
+                  );
+                }
+              } else {
+                console.log(
+                  colors.brightRed(
+                    `${prepModuleName} does not have a default function`,
+                  ),
+                );
+              }
+            }
+          } catch (err) {
+            console.log(colors.brightRed(prepModuleName));
+            console.log(err);
+          }
+          result.push(prepModuleName);
         }
-        result.push(prepModuleName);
       }
     }
     return result;
@@ -328,7 +354,13 @@ export class PublishCommandHandlerContext {
 
   async prepareBuild(): Promise<string[]> {
     return await this.handleHooks(
-      BuildLifecycleStep.PREPARE,
+      BuildLifecycleStep.BUILD_PREPARE,
+    );
+  }
+
+  async generateAssets(): Promise<string[]> {
+    return await this.handleHooks(
+      BuildLifecycleStep.GENERATE,
     );
   }
 
@@ -346,11 +378,12 @@ export class PublishCommandHandlerContext {
 
   async finalizeBuild() {
     await this.handleHooks(
-      BuildLifecycleStep.FINALIZE,
+      BuildLifecycleStep.BUILD_FINALIZE,
     );
   }
 
   async clean() {
+    this.handleHooks(BuildLifecycleStep.CLEAN);
     const hugoModClean = this.reportShellCmd(`hugox mod clean --all`);
     await shell.runShellCommand(hugoModClean, {
       ...(this.isVerbose
@@ -385,6 +418,7 @@ export class PublishCommandHandlerContext {
         : shell.quietShellOutputOptions),
       dryRun: this.isDryRun,
     });
+    this.handleHooks(BuildLifecycleStep.UPDATE);
   }
 
   suggestFileName(source: string): string {
@@ -429,17 +463,22 @@ export class PublishCommandHandlerContext {
   }
 }
 
+export async function validateHooksHandler(
+  ctx: PublishCommandHandlerContext,
+): Promise<true | void> {
+  const { "validate": validate, "hooks": hooks } = ctx.cliOptions;
+  if (validate && hooks) {
+    await ctx.validateHooks();
+    return true;
+  }
+}
+
 export async function inspectHandler(
   ctx: PublishCommandHandlerContext,
 ): Promise<true | void> {
-  const { "inspect": inspect, "hooks": hooks, "--validate": listOnly } =
-    ctx.cliOptions;
-  if (inspect && hooks) {
-    if (listOnly) {
-      await ctx.validateHooks();
-    } else {
-      await ctx.handleHooks(BuildLifecycleStep.INSPECT);
-    }
+  const { "inspect": inspect } = ctx.cliOptions;
+  if (inspect) {
+    await ctx.handleHooks(BuildLifecycleStep.INSPECT);
     return true;
   }
 }
@@ -471,6 +510,7 @@ export async function lintHandler(
         }
       }
     }
+    ctx.handleHooks(BuildLifecycleStep.LINT);
     return true;
   }
 }
@@ -481,6 +521,16 @@ export async function prepareBuildHandler(
   const { "prepare-build": auto } = ctx.cliOptions;
   if (auto) {
     await ctx.prepareBuild();
+    return true;
+  }
+}
+
+export async function generateHandler(
+  ctx: PublishCommandHandlerContext,
+): Promise<true | void> {
+  const { "generate": generate } = ctx.cliOptions;
+  if (generate) {
+    await ctx.generateAssets();
     return true;
   }
 }
@@ -501,6 +551,16 @@ export async function cleanHandler(
   const { "clean": clean } = ctx.cliOptions;
   if (clean) {
     await ctx.clean();
+    return true;
+  }
+}
+
+export async function doctorHandler(
+  ctx: PublishCommandHandlerContext,
+): Promise<true | void> {
+  const { "doctor": doctor } = ctx.cliOptions;
+  if (doctor) {
+    await ctx.handleHooks(BuildLifecycleStep.DOCTOR);
     return true;
   }
 }
@@ -531,11 +591,14 @@ export async function versionHandler(
 }
 
 export const commonHandlers = [
+  validateHooksHandler,
   inspectHandler,
   lintHandler,
   prepareBuildHandler,
   buildHandler,
+  generateHandler,
   cleanHandler,
+  doctorHandler,
   updateHandler,
   versionHandler,
 ];
