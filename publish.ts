@@ -45,23 +45,26 @@ export function defaultDocoptSpec(
 Publication Controller ${version}.
 
 Usage:
-  pubctl validate hooks [--project=<path>] [--hooks=<glob>]... [--dry-run] [--verbose]
-  pubctl inspect [--project=<path>] [--hooks=<glob>]...
-  pubctl lint [--project=<path>] [--cli-suggestions] [--hooks=<glob>]...
-  pubctl build (prepare|finalize) [--schedule=<cronSpec>] [--project=<path>] [--hooks=<glob>]... [--dry-run] [--verbose]
-  pubctl generate assets [--schedule=<cronSpec>] [--project=<path>] [--hooks=<glob>]... [--dry-run] [--verbose]
-  pubctl clean [--project=<path>] [--hooks=<glob>]... [--dry-run] [--verbose]
-  pubctl doctor [--project=<path>] [--hooks=<glob>]...
-  pubctl update [--project=<path>] [--hooks=<glob>]... [--dry-run] [--verbose]
+  pubctl validate hooks [<target>]... [--project=<path>] [--hooks=<glob>]... [--dry-run] [--verbose] [--arg=<name>]... [--argv=<value>]...
+  pubctl inspect [<target>]... [--project=<path>] [--hooks=<glob>]... [--arg=<name>]... [--argv=<value>]...
+  pubctl lint [<target>]... [--project=<path>] [--cli-suggestions] [--hooks=<glob>]... [--arg=<name>]... [--argv=<value>]...
+  pubctl build [<target>]... [--schedule=<cronSpec>] [--project=<path>] [--hooks=<glob>]... [--dry-run] [--verbose] [--arg=<name>]... [--argv=<value>]...
+  pubctl generate [<target>]... [--schedule=<cronSpec>] [--project=<path>] [--hooks=<glob>]... [--dry-run] [--verbose] [--arg=<name>]... [--argv=<value>]...
+  pubctl clean [<target>]... [--project=<path>] [--hooks=<glob>]... [--dry-run] [--verbose] [--arg=<name>]... [--argv=<value>]...
+  pubctl doctor [<target>]... [--project=<path>] [--hooks=<glob>]... [--dry-run] [--verbose] [--arg=<name>]... [--argv=<value>]...
+  pubctl update [<target>]... [--project=<path>] [--hooks=<glob>]... [--dry-run] [--verbose] [--arg=<name>]... [--argv=<value>]...
   pubctl version
   pubctl -h | --help
 
 Options:
+  <target>               One or more identifiers that the hook will understand
   --schedule=CRONSPEC    Cron spec for schedule [default: * * * * *]
   --project=PATH         The project's home directory, defaults to current directory
   --hooks=GLOB           Glob of hooks which will be found and executed [default: **/*/*.hook-pubctl.*]
   --dry-run              Show what will be done (but don't actually do it) [default: false]
   --verbose              Be explicit about what's going on [default: false]
+  --arg=NAME             Name of an arbitrary argument to pass to handler
+  --argv=VALUE           Value of an arbitrary argument to pass to handler, must match same order as --arg
   -h --help              Show this screen
 `;
 }
@@ -70,19 +73,30 @@ export interface PublishCommandHandler<T extends PublishCommandHandlerContext> {
   (ctx: T): Promise<true | void>;
 }
 
-export enum BuildLifecycleStep {
+export enum HookLifecycleStep {
   DOCTOR = "doctor",
   LINT = "lint",
-  BUILD_PREPARE = "build-prepare",
-  BUILD_FINALIZE = "build-finalize",
+  BUILD = "build",
   INSPECT = "inspect",
-  GENERATE = "generate-assets",
+  GENERATE = "generate",
   CLEAN = "clean",
   UPDATE = "update",
 }
 
-export interface BuildLifecycleHandler<T extends PublishCommandHandlerContext> {
-  (ctx: T, step: BuildLifecycleStep): Promise<true | void>;
+export interface HookModuleContext {
+  readonly name: string;
+  readonly absPathOnly: string;
+  readonly absPathAndName: string;
+  readonly pathRelToProject: string;
+  readonly pathRelToCwd: string;
+}
+
+export interface HookHandler<T extends PublishCommandHandlerContext> {
+  (
+    step: HookLifecycleStep,
+    hookModuleCtx: HookModuleContext,
+    pubCtlCtx: T,
+  ): Promise<true | void> | true | void;
 }
 
 export interface PublishLintFileNameIssueDiagnostic {
@@ -102,6 +116,8 @@ export interface PublishLintResults {
 export class PublishCommandHandlerContext {
   readonly projectHome: string;
   readonly hooksGlobs: string[];
+  readonly targets: string[];
+  readonly arguments: Record<string, string> = {};
   readonly schedule?: string;
   readonly isVerbose: boolean;
   readonly isDryRun: boolean;
@@ -116,14 +132,38 @@ export class PublishCommandHandlerContext {
       "--verbose": verbose,
       "--dry-run": dryRun,
       "--schedule": schedule,
+      "<target>": targets,
+      "--arg": argNames,
+      "--argv": argsValues,
     } = this.cliOptions;
     this.projectHome = projectHome
       ? projectHome as string
       : (chsOptions.projectHome || Deno.cwd());
     this.hooksGlobs = hooksGlob as string[];
+    this.targets = targets as string[];
     this.schedule = schedule ? schedule.toString() : undefined;
     this.isDryRun = dryRun ? true : false;
     this.isVerbose = this.isDryRun || (verbose ? true : false);
+
+    if (argNames) {
+      const an = argNames as string[];
+      const av = argsValues as string[];
+
+      if (an.length == av.length) {
+        for (let i = 0; i < an.length; i++) {
+          const key = an[i];
+          const value = av[i];
+          this.arguments[key] = value;
+        }
+      } else {
+        console.error(
+          colors.brightRed("--arg and --argv must be balanced") + ": ",
+          `there are ${colors.yellow(an.length.toString())} arg names and ${
+            colors.yellow(av.length.toString())
+          } values`,
+        );
+      }
+    }
   }
 
   reportShellCmd(cmd: string): string {
@@ -133,17 +173,28 @@ export class PublishCommandHandlerContext {
     return cmd;
   }
 
-  isExecutable(path: string): boolean {
-    if (Deno.build.os === "windows") {
-      return true;
-    }
+  isExecutable(path: string, step?: HookLifecycleStep): false | string[] {
     const fi = Deno.statSync(path);
-    return fi.mode != null ? (fi.mode & 0o0001 ? true : false) : true;
+    const isExe = fi.mode != null ? (fi.mode & 0o0001 ? true : false) : true;
+    if (isExe) {
+      const cmd = ["/bin/sh", "-c", path];
+      if (step) cmd.push(step);
+      if (this.targets.length > 0) cmd.push(...this.targets);
+      if (this.isVerbose) cmd.push("--verbose");
+      if (this.isDryRun) cmd.push("--dry-run");
+      for (const arg of Object.entries(this.arguments)) {
+        const [name, value] = arg;
+        cmd.push(name, value);
+      }
+      return cmd;
+    }
+    return false;
   }
 
   subprocessEnvVars(
     hookAbsPath: string,
-    step?: BuildLifecycleStep,
+    step?: HookLifecycleStep,
+    addEnvVars?: Record<string, string>,
   ): Record<string, string> {
     const hookHome = path.dirname(hookAbsPath);
     const result: Record<string, string> = {
@@ -155,9 +206,18 @@ export class PublishCommandHandlerContext {
       PUBCTLHOOK_NAME: path.basename(hookAbsPath),
       PUBCTLHOOK_PROJECT_HOME_ABS: this.projectHome,
       PUBCTLHOOK_PROJECT_HOME_REL: path.relative(hookHome, this.projectHome),
-      PUBCTLHOOK_CALL: JSON.stringify(this.cliOptions),
+      PUBCTLHOOK_CLI_OPTIONS_JSON: JSON.stringify(this.cliOptions),
     };
     if (this.schedule) result.PUBCTLHOOK_SCHEDULE = this.schedule;
+    if (this.targets.length > 0) {
+      result.PUBCTLHOOK_TARGETS = this.targets.join(" ");
+    }
+    if (Object.keys(this.arguments).length > 0) {
+      result.PUBCTLHOOK_ARGS_JSON = JSON.stringify(this.arguments);
+    }
+    if (addEnvVars) {
+      return { ...result, ...addEnvVars };
+    }
     return result;
   }
 
@@ -169,13 +229,15 @@ export class PublishCommandHandlerContext {
           const prepModuleName = path.relative(this.projectHome, we.path);
 
           if (path.extname(we.name) != ".ts") {
-            if (this.isExecutable(we.path)) {
+            const exeCmd = this.isExecutable(we.path);
+            if (exeCmd) {
               console.log(
                 colors.yellow(prepModuleName),
                 colors.green("executable"),
                 colors.blue("will be called with environment variables"),
                 this.subprocessEnvVars(we.path),
               );
+              console.log(colors.dim(exeCmd.join(" ")));
             } else {
               console.log(
                 colors.yellow(prepModuleName),
@@ -228,7 +290,7 @@ export class PublishCommandHandlerContext {
     }
   }
 
-  getBuildHookModuleRelNames(): string[] {
+  getHookModuleRelNames(): string[] {
     const result = [];
     for (const glob of this.hooksGlobs) {
       for (const we of fs.expandGlobSync(glob)) {
@@ -258,14 +320,13 @@ export class PublishCommandHandlerContext {
    * export default buildHook;
    * @param step The build lifecylce being executed
    */
-  async handleHooks(
-    step: BuildLifecycleStep,
-  ): Promise<string[]> {
+  async handleHooks(step: HookLifecycleStep): Promise<string[]> {
     const result = [];
     for (const glob of this.hooksGlobs) {
       for (const we of fs.expandGlobSync(glob)) {
         if (we.isFile) {
           const prepModuleName = path.relative(this.projectHome, we.path);
+          const env = this.subprocessEnvVars(we.path, step);
 
           if (path.extname(we.name) != ".ts") {
             if (this.isExecutable(we.path)) {
@@ -277,15 +338,21 @@ export class PublishCommandHandlerContext {
                   };
                 };
 
+              const cmd = [
+                "/bin/sh",
+                "-c",
+                ...shell.commandComponents(we.path),
+                step,
+              ];
+              for (const arg of Object.entries(this.arguments)) {
+                const [name, value] = arg;
+                cmd.push(name, value);
+              }
               await shell.runShellCommand(
                 {
-                  cmd: [
-                    "/bin/sh",
-                    "-c",
-                    ...shell.commandComponents(we.path),
-                  ],
+                  cmd: cmd,
                   cwd: path.dirname(we.path),
-                  env: this.subprocessEnvVars(we.path, step),
+                  env: env,
                 },
                 {
                   // the subprocess is responsible for checking verbose/dry-run
@@ -301,6 +368,7 @@ export class PublishCommandHandlerContext {
             continue;
           }
 
+          console.log(colors.yellow(path.relative(this.projectHome, we.path)));
           try {
             // the hugo-aide package is going to be URL-imported but the files
             // we're importing are local to the calling pubctl.ts in the project
@@ -308,38 +376,44 @@ export class PublishCommandHandlerContext {
             const module = await import(
               path.toFileUrl(we.path).toString()
             );
-            if (this.isDryRun || this.isVerbose) {
+            if (this.isVerbose) {
               console.log(
                 step,
                 colors.yellow(prepModuleName),
                 module ? colors.green("imported") : colors.red("not imported"),
               );
             }
-            if (!this.isDryRun) {
-              if (typeof module.default === "function") {
-                const handler = module.default as BuildLifecycleHandler<
-                  PublishCommandHandlerContext
-                >;
-                const isAsync = handler.constructor.name === "AsyncFunction";
-                if (isAsync) {
-                  await handler(this, step);
-                } else {
-                  handler(this, step);
-                }
-                if (this.isVerbose) {
-                  console.log(
-                    step,
-                    colors.yellow(prepModuleName),
-                    colors.green("executed"),
-                  );
-                }
+            if (typeof module.default === "function") {
+              const handler = module.default as HookHandler<
+                PublishCommandHandlerContext
+              >;
+              const isAsync = handler.constructor.name === "AsyncFunction";
+              const hmCtx: HookModuleContext = {
+                name: we.name,
+                absPathOnly: path.dirname(we.path),
+                absPathAndName: we.path,
+                pathRelToProject: path.relative(this.projectHome, we.path),
+                pathRelToCwd: path.relative(Deno.cwd(), we.path),
+              };
+              if (isAsync) {
+                await handler(step, hmCtx, this);
               } else {
+                handler(step, hmCtx, this);
+              }
+              if (this.isVerbose) {
                 console.log(
-                  colors.brightRed(
-                    `${prepModuleName} does not have a default function`,
-                  ),
+                  step,
+                  colors.yellow(prepModuleName),
+                  colors.green("executed"),
+                  colors.blue(isAsync ? "(async)" : "(sync)"),
                 );
               }
+            } else {
+              console.log(
+                colors.brightRed(
+                  `${prepModuleName} does not have a default function`,
+                ),
+              );
             }
           } catch (err) {
             console.log(colors.brightRed(prepModuleName));
@@ -352,38 +426,16 @@ export class PublishCommandHandlerContext {
     return result;
   }
 
-  async prepareBuild(): Promise<string[]> {
-    return await this.handleHooks(
-      BuildLifecycleStep.BUILD_PREPARE,
-    );
-  }
-
   async generateAssets(): Promise<string[]> {
-    return await this.handleHooks(
-      BuildLifecycleStep.GENERATE,
-    );
+    return await this.handleHooks(HookLifecycleStep.GENERATE);
   }
 
   async build() {
-    await this.prepareBuild();
-    const updatePkgs = this.reportShellCmd(`hugox`);
-    await shell.runShellCommand(updatePkgs, {
-      ...(this.isVerbose
-        ? shell.cliVerboseShellOutputOptions
-        : shell.quietShellOutputOptions),
-      dryRun: this.isDryRun,
-    });
-    await this.finalizeBuild();
-  }
-
-  async finalizeBuild() {
-    await this.handleHooks(
-      BuildLifecycleStep.BUILD_FINALIZE,
-    );
+    return await this.handleHooks(HookLifecycleStep.BUILD);
   }
 
   async clean() {
-    this.handleHooks(BuildLifecycleStep.CLEAN);
+    this.handleHooks(HookLifecycleStep.CLEAN);
     const hugoModClean = this.reportShellCmd(`hugox mod clean --all`);
     await shell.runShellCommand(hugoModClean, {
       ...(this.isVerbose
@@ -410,7 +462,7 @@ export class PublishCommandHandlerContext {
    */
   async update() {
     const updatePkgs = this.reportShellCmd(
-      `udd pubctl.ts ${this.getBuildHookModuleRelNames().join(" ")}`,
+      `udd pubctl.ts ${this.getHookModuleRelNames().join(" ")}`,
     );
     await shell.runShellCommand(updatePkgs, {
       ...(this.isVerbose
@@ -418,7 +470,7 @@ export class PublishCommandHandlerContext {
         : shell.quietShellOutputOptions),
       dryRun: this.isDryRun,
     });
-    this.handleHooks(BuildLifecycleStep.UPDATE);
+    this.handleHooks(HookLifecycleStep.UPDATE);
   }
 
   suggestFileName(source: string): string {
@@ -478,7 +530,7 @@ export async function inspectHandler(
 ): Promise<true | void> {
   const { "inspect": inspect } = ctx.cliOptions;
   if (inspect) {
-    await ctx.handleHooks(BuildLifecycleStep.INSPECT);
+    await ctx.handleHooks(HookLifecycleStep.INSPECT);
     return true;
   }
 }
@@ -510,17 +562,7 @@ export async function lintHandler(
         }
       }
     }
-    ctx.handleHooks(BuildLifecycleStep.LINT);
-    return true;
-  }
-}
-
-export async function prepareBuildHandler(
-  ctx: PublishCommandHandlerContext,
-): Promise<true | void> {
-  const { "prepare-build": auto } = ctx.cliOptions;
-  if (auto) {
-    await ctx.prepareBuild();
+    ctx.handleHooks(HookLifecycleStep.LINT);
     return true;
   }
 }
@@ -538,7 +580,7 @@ export async function generateHandler(
 export async function buildHandler(
   ctx: PublishCommandHandlerContext,
 ): Promise<true | void> {
-  const { "build": build } = ctx.cliOptions;
+  const { "build": build, "<target>": targets } = ctx.cliOptions;
   if (build) {
     await ctx.build();
     return true;
@@ -560,7 +602,7 @@ export async function doctorHandler(
 ): Promise<true | void> {
   const { "doctor": doctor } = ctx.cliOptions;
   if (doctor) {
-    await ctx.handleHooks(BuildLifecycleStep.DOCTOR);
+    await ctx.handleHooks(HookLifecycleStep.DOCTOR);
     return true;
   }
 }
@@ -594,7 +636,6 @@ export const commonHandlers = [
   validateHooksHandler,
   inspectHandler,
   lintHandler,
-  prepareBuildHandler,
   buildHandler,
   generateHandler,
   cleanHandler,
