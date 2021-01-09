@@ -15,6 +15,7 @@ import {
   path,
   shell,
 } from "./deps.ts";
+import * as pl from "./plugins.ts";
 
 export function determineVersion(importMetaURL: string): Promise<string> {
   return gsv.determineVersionFromRepoTag(
@@ -24,18 +25,25 @@ export function determineVersion(importMetaURL: string): Promise<string> {
 }
 
 export interface CommandHandlerSpecOptions<
-  T extends PublishCommandHandlerContext = PublishCommandHandlerContext,
+  O extends PublishCommandHandlerOptions = PublishCommandHandlerOptions,
+  C extends PublishCommandHandlerContext = PublishCommandHandlerContext,
 > {
   readonly calledFromMetaURL: string;
   readonly calledFromMain: boolean;
   readonly version: string;
   readonly projectHome?: string;
   readonly docoptSpec?: (chsOptions: CommandHandlerSpecOptions) => string;
-  readonly customHandlers?: PublishCommandHandler<T>[];
-  readonly prepareContext?: (
+  readonly customHandlers?: PublishCommandHandler<C>[];
+  readonly prepareOptions?: (
     chsOptions: CommandHandlerSpecOptions,
     cliOptions: docopt.DocOptions,
-  ) => T;
+  ) => O;
+  readonly prepareContext?: (
+    options: O,
+    pluginsMgr: PublishCommandHandlerPluginsManager<
+      PublishCommandHandlerContext
+    >,
+  ) => C;
 }
 
 export function defaultDocoptSpec(
@@ -83,20 +91,44 @@ export enum HookLifecycleStep {
   UPDATE = "update",
 }
 
-export interface HookModuleContext {
-  readonly name: string;
-  readonly absPathOnly: string;
-  readonly absPathAndName: string;
-  readonly pathRelToProject: string;
-  readonly pathRelToCwd: string;
+export interface HookContext<T extends PublishCommandHandlerContext>
+  extends pl.PluginContext<PublishCommandHandlerContext> {
+  readonly pubCtlCtx: T;
+  readonly step: HookLifecycleStep;
 }
 
-export interface HookHandler<T extends PublishCommandHandlerContext> {
+export function isHookContext<T extends PublishCommandHandlerContext>(
+  o: unknown,
+): o is HookContext<T> {
+  if (pl.isPluginContext(o)) {
+    return "step" in o && "pubCtlCtx" in o;
+  }
+  return false;
+}
+
+export interface HookModulePlugin<T extends PublishCommandHandlerContext>
+  extends pl.DenoModulePlugin {
+  readonly handler: HookModuleHandler<T>;
+  readonly isAsync: boolean;
+}
+
+export function isHookModulePlugin<T extends PublishCommandHandlerContext>(
+  o: unknown,
+): o is HookModulePlugin<T> {
+  if (pl.isDenoModulePlugin(o)) {
+    return "handler" in o && "isAsync" in o;
+  }
+  return false;
+}
+
+// deno-lint-ignore no-empty-interface
+export interface HookModuleHandlerResult {
+}
+
+export interface HookModuleHandler<T extends PublishCommandHandlerContext> {
   (
-    step: HookLifecycleStep,
-    hookModuleCtx: HookModuleContext,
-    pubCtlCtx: T,
-  ): Promise<true | void> | true | void;
+    hc: HookContext<T>,
+  ): Promise<HookModuleHandlerResult> | HookModuleHandlerResult;
 }
 
 export interface PublishLintFileNameIssueDiagnostic {
@@ -113,7 +145,7 @@ export interface PublishLintResults {
   readonly fileNameIssues: PublishLintFileNameIssue[];
 }
 
-export class PublishCommandHandlerContext {
+export class PublishCommandHandlerOptions {
   readonly projectHome: string;
   readonly hooksGlobs: string[];
   readonly targets: string[];
@@ -165,142 +197,252 @@ export class PublishCommandHandlerContext {
       }
     }
   }
+}
+
+export class PublishCommandHandlerPluginsManager<
+  T extends PublishCommandHandlerContext,
+> implements pl.FileSystemPluginsSupplier {
+  readonly plugins: pl.Plugin[] = [];
+  readonly invalidPlugins: pl.InvalidPluginRegistration[] = [];
+  readonly localFsSources: pl.FileSystemGlobs;
+
+  constructor(readonly options: PublishCommandHandlerOptions) {
+    this.localFsSources = options.hooksGlobs;
+  }
+
+  async init(): Promise<void> {
+    await pl.discoverFileSystemPlugins({
+      discoveryPath: this.options.projectHome,
+      globs: this.localFsSources,
+      onValidPlugin: (vpr) => {
+        this.plugins.push(vpr.plugin);
+      },
+      onInvalidPlugin: (ipr) => {
+        this.invalidPlugins.push(ipr);
+      },
+      shellFileRegistryOptions: {
+        shellCmdEnhancer: (
+          pc: pl.PluginContext<T>,
+          suggestedCmd: string[],
+        ): string[] => {
+          if (!isHookContext(pc)) throw new Error("pc must be HookContext");
+          const cmd = [...suggestedCmd];
+          cmd.push(pc.step);
+          if (this.options.targets.length > 0) {
+            cmd.push(...this.options.targets);
+          }
+          if (this.options.isVerbose) cmd.push("--verbose");
+          if (this.options.isDryRun) cmd.push("--dry-run");
+          for (const arg of Object.entries(this.options.arguments)) {
+            const [name, value] = arg;
+            cmd.push(name, value);
+          }
+          return cmd;
+        },
+        runShellCmdOpts: (): shell.RunShellCommandOptions => {
+          return shell.cliVerboseShellOutputOptions;
+        },
+        envVarsSupplier: (
+          pc: pl.PluginContext<T>,
+        ): Record<string, string> => {
+          if (!isHookContext(pc)) throw new Error("pc must be HookContext");
+          if (!pl.isDiscoverFileSystemPluginSource(pc.plugin.source)) {
+            throw new Error(
+              "pc.plugin.source must be DiscoverFileSystemPluginSource",
+            );
+          }
+          const hookHome = path.dirname(pc.plugin.source.absPathAndFileName);
+          const result: Record<string, string> = {
+            PUBCTLHOOK_LIFECYLE_STEP: pc.step,
+            PUBCTLHOOK_VERBOSE: this.options.isVerbose ? "1" : "0",
+            PUBCTLHOOK_DRY_RUN: this.options.isDryRun ? "1" : "0",
+            PUBCTLHOOK_HOME_ABS: hookHome,
+            PUBCTLHOOK_HOME_REL: path.relative(
+              this.options.projectHome,
+              hookHome,
+            ),
+            PUBCTLHOOK_NAME: path.basename(pc.plugin.source.absPathAndFileName),
+            PUBCTLHOOK_PROJECT_HOME_ABS: this.options.projectHome,
+            PUBCTLHOOK_PROJECT_HOME_REL: path.relative(
+              hookHome,
+              this.options.projectHome,
+            ),
+            PUBCTLHOOK_CLI_OPTIONS_JSON: JSON.stringify(
+              this.options.cliOptions,
+            ),
+          };
+          if (this.options.schedule) {
+            result.PUBCTLHOOK_SCHEDULE = this.options.schedule;
+          }
+          if (this.options.targets.length > 0) {
+            result.PUBCTLHOOK_TARGETS = this.options.targets.join(" ");
+          }
+          if (Object.keys(this.options.arguments).length > 0) {
+            result.PUBCTLHOOK_ARGS_JSON = JSON.stringify(
+              this.options.arguments,
+            );
+          }
+          return result;
+        },
+      },
+      typeScriptFileRegistryOptions: {
+        isValidModule: (
+          potential: pl.DenoModulePlugin,
+        ): pl.InvalidPluginRegistration | pl.ValidPluginRegistration => {
+          if (!pl.isDiscoverFileSystemPluginSource(potential.source)) {
+            throw new Error(
+              "potential.source must be DiscoverFileSystemPluginSource",
+            );
+          }
+
+          // deno-lint-ignore no-explicit-any
+          const module = potential.module as any;
+          if (this.options.isVerbose) {
+            console.log(
+              colors.yellow(potential.source.friendlyName),
+              module ? colors.green("imported") : colors.red("not imported"),
+            );
+          }
+          if (typeof module.default === "function") {
+            const handler = module.default as HookModuleHandler<
+              PublishCommandHandlerContext
+            >;
+            const isAsync = handler.constructor.name === "AsyncFunction";
+            const plugin: HookModulePlugin<T> = {
+              ...potential,
+              handler,
+              isAsync,
+            };
+            const result: pl.ValidPluginRegistration = {
+              source: potential.source,
+              plugin,
+            };
+            return result;
+          } else {
+            const result: pl.InvalidPluginRegistration = {
+              source: potential.source,
+              issues: [{
+                source: potential.source,
+                diagnostics: [`does not have a default function`],
+              }],
+            };
+            return result;
+          }
+        },
+      },
+    });
+  }
+}
+
+export class PublishCommandHandlerContext implements pl.PluginContainer {
+  constructor(
+    readonly options: PublishCommandHandlerOptions,
+    readonly pluginsMgr: PublishCommandHandlerPluginsManager<
+      PublishCommandHandlerContext
+    >,
+  ) {
+  }
+
+  async init(): Promise<void> {
+  }
 
   reportShellCmd(cmd: string): string {
-    if (this.isVerbose && !this.isDryRun) {
+    if (this.options.isVerbose && !this.options.isDryRun) {
       console.log(colors.brightCyan(cmd));
     }
     return cmd;
   }
 
-  isExecutable(path: string, step?: HookLifecycleStep): false | string[] {
-    const fi = Deno.statSync(path);
-    const isExe = fi.mode != null ? (fi.mode & 0o0001 ? true : false) : true;
-    if (isExe) {
-      const cmd = ["/bin/sh", "-c", path];
-      if (step) cmd.push(step);
-      if (this.targets.length > 0) cmd.push(...this.targets);
-      if (this.isVerbose) cmd.push("--verbose");
-      if (this.isDryRun) cmd.push("--dry-run");
-      for (const arg of Object.entries(this.arguments)) {
-        const [name, value] = arg;
-        cmd.push(name, value);
+  validateHooks(): void {
+    for (const glob of this.options.hooksGlobs) {
+      console.log(`Searched for hooks in '${colors.yellow(glob)}'`);
+    }
+
+    let firstValid = true;
+    for (const hook of this.pluginsMgr.plugins) {
+      if (firstValid) {
+        console.log(colors.green("-- Registered hooks --"));
+        firstValid = false;
       }
-      return cmd;
+      const pc: HookContext<PublishCommandHandlerContext> = {
+        container: this,
+        plugin: hook,
+        pubCtlCtx: this,
+        step: HookLifecycleStep.DOCTOR,
+      };
+      if (pl.isShellExePlugin<PublishCommandHandlerContext>(hook)) {
+        if (hook.envVars) {
+          console.log(
+            colors.yellow(hook.source.friendlyName),
+            colors.green(hook.nature.identity),
+            colors.blue("will be called with environment variables"),
+            hook.envVars(pc),
+          );
+        } else {
+          console.log(
+            colors.yellow(hook.source.friendlyName),
+            colors.green(hook.nature.identity),
+          );
+        }
+        console.log(colors.dim(hook.shellCmd(pc).join(" ")));
+        continue;
+      }
+      if (isHookModulePlugin(hook)) {
+        console.log(
+          colors.yellow(hook.source.friendlyName),
+          colors.green(hook.nature.identity),
+          hook.isAsync ? colors.brightBlue("async") : colors.brightBlue("sync"),
+        );
+      }
     }
-    return false;
+
+    let firstInvalid = true;
+    for (const ipr of this.pluginsMgr.invalidPlugins) {
+      if (firstInvalid) {
+        console.log(colors.green("-- Hooks that could not be registered --"));
+        firstInvalid = false;
+      }
+      console.log(colors.yellow(ipr.source.systemID));
+      for (const issue of ipr.issues) {
+        console.warn(
+          "* ",
+          issue.diagnostics.map((d) => colors.red(d.toString())),
+        );
+      }
+    }
   }
 
-  subprocessEnvVars(
-    hookAbsPath: string,
-    step?: HookLifecycleStep,
-    addEnvVars?: Record<string, string>,
-  ): Record<string, string> {
-    const hookHome = path.dirname(hookAbsPath);
-    const result: Record<string, string> = {
-      PUBCTLHOOK_LIFECYLE_STEP: step || "validate",
-      PUBCTLHOOK_VERBOSE: this.isVerbose ? "1" : "0",
-      PUBCTLHOOK_DRY_RUN: this.isDryRun ? "1" : "0",
-      PUBCTLHOOK_HOME_ABS: hookHome,
-      PUBCTLHOOK_HOME_REL: path.relative(this.projectHome, hookHome),
-      PUBCTLHOOK_NAME: path.basename(hookAbsPath),
-      PUBCTLHOOK_PROJECT_HOME_ABS: this.projectHome,
-      PUBCTLHOOK_PROJECT_HOME_REL: path.relative(hookHome, this.projectHome),
-      PUBCTLHOOK_CLI_OPTIONS_JSON: JSON.stringify(this.cliOptions),
-    };
-    if (this.schedule) result.PUBCTLHOOK_SCHEDULE = this.schedule;
-    if (this.targets.length > 0) {
-      result.PUBCTLHOOK_TARGETS = this.targets.join(" ");
-    }
-    if (Object.keys(this.arguments).length > 0) {
-      result.PUBCTLHOOK_ARGS_JSON = JSON.stringify(this.arguments);
-    }
-    if (addEnvVars) {
-      return { ...result, ...addEnvVars };
-    }
-    return result;
-  }
-
-  async validateHooks(): Promise<void> {
-    for (const glob of this.hooksGlobs) {
-      console.log(`Hooks with glob '${colors.brightCyan(glob)}':`);
-      for (const we of fs.expandGlobSync(glob)) {
-        if (we.isFile) {
-          const prepModuleName = path.relative(this.projectHome, we.path);
-
-          if (path.extname(we.name) != ".ts") {
-            const exeCmd = this.isExecutable(we.path);
-            if (exeCmd) {
-              console.log(
-                colors.yellow(prepModuleName),
-                colors.green("executable"),
-                colors.blue("will be called with environment variables"),
-                this.subprocessEnvVars(we.path),
-              );
-              console.log(colors.dim(exeCmd.join(" ")));
-            } else {
-              console.log(
-                colors.yellow(prepModuleName),
-                colors.brightRed("not executable"),
-              );
-            }
-            continue;
-          }
-
-          try {
-            // the hugo-aide package is going to be URL-imported but the files
-            // we're importing are local to the calling pubctl.ts in the project
-            // so we need to use absolute paths
-            const module = await import(
-              path.toFileUrl(we.path).toString()
-            );
-            if (module) {
-              if (typeof module.default === "function") {
-                const isAsync =
-                  module.default.constructor.name === "AsyncFunction";
-                console.log(
-                  colors.yellow(prepModuleName),
-                  colors.green("TypeScript valid Deno hook"),
-                  isAsync
-                    ? colors.brightBlue("async")
-                    : colors.brightBlue("sync"),
-                );
-              } else {
-                console.log(
-                  colors.yellow(prepModuleName),
-                  colors.brightRed(
-                    `invalid TypeScript Deno hook: does not have a default function`,
-                  ),
-                );
-              }
-            } else {
-              console.log(
-                colors.yellow(prepModuleName),
-                colors.brightRed(
-                  `invalid TypeScript Deno hook: unable to import module`,
-                ),
-              );
-            }
-          } catch (err) {
-            console.log(colors.brightRed(prepModuleName));
-            console.log(err);
-          }
+  async executeHooks(step: HookLifecycleStep): Promise<void> {
+    for (const hook of this.pluginsMgr.plugins) {
+      if (!pl.isDiscoverFileSystemPluginSource(hook.source)) {
+        console.warn(
+          colors.brightRed(
+            `executeHooks(${step}) found a non-DiscoverFileSystemPluginSource:`,
+          ),
+          colors.blue(hook.nature.identity),
+          colors.yellow(hook.source.systemID),
+        );
+        continue;
+      }
+      const pc: HookContext<PublishCommandHandlerContext> = {
+        container: this,
+        plugin: hook,
+        pubCtlCtx: this,
+        step,
+      };
+      console.log(colors.yellow(hook.source.friendlyName));
+      if (pl.isActionPlugin<PublishCommandHandlerContext>(hook)) {
+        hook.execute(pc);
+        continue;
+      }
+      if (isHookModulePlugin(hook)) {
+        if (hook.isAsync) {
+          await hook.handler(pc);
+        } else {
+          hook.handler(pc);
         }
       }
     }
-  }
-
-  getHookModuleRelNames(): string[] {
-    const result = [];
-    for (const glob of this.hooksGlobs) {
-      for (const we of fs.expandGlobSync(glob)) {
-        if (we.isFile) {
-          const prepModuleName = path.relative(this.projectHome, we.path);
-          result.push(prepModuleName);
-        }
-      }
-    }
-    return result;
   }
 
   /**
@@ -320,136 +462,136 @@ export class PublishCommandHandlerContext {
    * export default buildHook;
    * @param step The build lifecylce being executed
    */
-  async handleHooks(step: HookLifecycleStep): Promise<string[]> {
-    const result = [];
-    for (const glob of this.hooksGlobs) {
-      for (const we of fs.expandGlobSync(glob)) {
-        if (we.isFile) {
-          const prepModuleName = path.relative(this.projectHome, we.path);
-          const env = this.subprocessEnvVars(we.path, step);
+  // async handleHooks(step: HookLifecycleStep): Promise<string[]> {
+  //   const result = [];
+  //   for (const glob of this.hooksGlobs) {
+  //     for (const we of fs.expandGlobSync(glob)) {
+  //       if (we.isFile) {
+  //         const prepModuleName = path.relative(this.projectHome, we.path);
+  //         const env = this.subprocessEnvVars(we.path, step);
 
-          if (path.extname(we.name) != ".ts") {
-            if (this.isExecutable(we.path)) {
-              const blockHeader =
-                (): shell.CliVerboseShellBlockHeaderResult => {
-                  return {
-                    headerText: `${prepModuleName}`,
-                    separatorText: "",
-                  };
-                };
+  //         if (path.extname(we.name) != ".ts") {
+  //           if (this.isExecutable(we.path)) {
+  //             const blockHeader =
+  //               (): shell.CliVerboseShellBlockHeaderResult => {
+  //                 return {
+  //                   headerText: `${prepModuleName}`,
+  //                   separatorText: "",
+  //                 };
+  //               };
 
-              const cmd = [
-                "/bin/sh",
-                "-c",
-                ...shell.commandComponents(we.path),
-                step,
-              ];
-              for (const arg of Object.entries(this.arguments)) {
-                const [name, value] = arg;
-                cmd.push(name, value);
-              }
-              await shell.runShellCommand(
-                {
-                  cmd: cmd,
-                  cwd: path.dirname(we.path),
-                  env: env,
-                },
-                {
-                  // the subprocess is responsible for checking verbose/dry-run
-                  ...shell.cliVerboseShellBlockOutputOptions(blockHeader),
-                },
-              );
-            } else {
-              console.log(
-                colors.yellow(prepModuleName),
-                colors.brightRed("not executable"),
-              );
-            }
-            continue;
-          }
+  //             const cmd = [
+  //               "/bin/sh",
+  //               "-c",
+  //               ...shell.commandComponents(we.path),
+  //               step,
+  //             ];
+  //             for (const arg of Object.entries(this.arguments)) {
+  //               const [name, value] = arg;
+  //               cmd.push(name, value);
+  //             }
+  //             await shell.runShellCommand(
+  //               {
+  //                 cmd: cmd,
+  //                 cwd: path.dirname(we.path),
+  //                 env: env,
+  //               },
+  //               {
+  //                 // the subprocess is responsible for checking verbose/dry-run
+  //                 ...shell.cliVerboseShellBlockOutputOptions(blockHeader),
+  //               },
+  //             );
+  //           } else {
+  //             console.log(
+  //               colors.yellow(prepModuleName),
+  //               colors.brightRed("not executable"),
+  //             );
+  //           }
+  //           continue;
+  //         }
 
-          console.log(colors.yellow(path.relative(this.projectHome, we.path)));
-          try {
-            // the hugo-aide package is going to be URL-imported but the files
-            // we're importing are local to the calling pubctl.ts in the project
-            // so we need to use absolute paths
-            const module = await import(
-              path.toFileUrl(we.path).toString()
-            );
-            if (this.isVerbose) {
-              console.log(
-                step,
-                colors.yellow(prepModuleName),
-                module ? colors.green("imported") : colors.red("not imported"),
-              );
-            }
-            if (typeof module.default === "function") {
-              const handler = module.default as HookHandler<
-                PublishCommandHandlerContext
-              >;
-              const isAsync = handler.constructor.name === "AsyncFunction";
-              const hmCtx: HookModuleContext = {
-                name: we.name,
-                absPathOnly: path.dirname(we.path),
-                absPathAndName: we.path,
-                pathRelToProject: path.relative(this.projectHome, we.path),
-                pathRelToCwd: path.relative(Deno.cwd(), we.path),
-              };
-              if (isAsync) {
-                await handler(step, hmCtx, this);
-              } else {
-                handler(step, hmCtx, this);
-              }
-              if (this.isVerbose) {
-                console.log(
-                  step,
-                  colors.yellow(prepModuleName),
-                  colors.green("executed"),
-                  colors.blue(isAsync ? "(async)" : "(sync)"),
-                );
-              }
-            } else {
-              console.log(
-                colors.brightRed(
-                  `${prepModuleName} does not have a default function`,
-                ),
-              );
-            }
-          } catch (err) {
-            console.log(colors.brightRed(prepModuleName));
-            console.log(err);
-          }
-          result.push(prepModuleName);
-        }
-      }
-    }
-    return result;
-  }
+  //         console.log(colors.yellow(path.relative(this.projectHome, we.path)));
+  //         try {
+  //           // the hugo-aide package is going to be URL-imported but the files
+  //           // we're importing are local to the calling pubctl.ts in the project
+  //           // so we need to use absolute paths
+  //           const module = await import(
+  //             path.toFileUrl(we.path).toString()
+  //           );
+  //           if (this.isVerbose) {
+  //             console.log(
+  //               step,
+  //               colors.yellow(prepModuleName),
+  //               module ? colors.green("imported") : colors.red("not imported"),
+  //             );
+  //           }
+  //           if (typeof module.default === "function") {
+  //             const handler = module.default as HookModuleHandler<
+  //               PublishCommandHandlerContext
+  //             >;
+  //             const isAsync = handler.constructor.name === "AsyncFunction";
+  //             const hmCtx: HookModuleContext = {
+  //               name: we.name,
+  //               absPathOnly: path.dirname(we.path),
+  //               absPathAndName: we.path,
+  //               pathRelToProject: path.relative(this.projectHome, we.path),
+  //               pathRelToCwd: path.relative(Deno.cwd(), we.path),
+  //             };
+  //             if (isAsync) {
+  //               await handler(step, hmCtx, this);
+  //             } else {
+  //               handler(step, hmCtx, this);
+  //             }
+  //             if (this.isVerbose) {
+  //               console.log(
+  //                 step,
+  //                 colors.yellow(prepModuleName),
+  //                 colors.green("executed"),
+  //                 colors.blue(isAsync ? "(async)" : "(sync)"),
+  //               );
+  //             }
+  //           } else {
+  //             console.log(
+  //               colors.brightRed(
+  //                 `${prepModuleName} does not have a default function`,
+  //               ),
+  //             );
+  //           }
+  //         } catch (err) {
+  //           console.log(colors.brightRed(prepModuleName));
+  //           console.log(err);
+  //         }
+  //         result.push(prepModuleName);
+  //       }
+  //     }
+  //   }
+  //   return result;
+  // }
 
-  async generateAssets(): Promise<string[]> {
-    return await this.handleHooks(HookLifecycleStep.GENERATE);
+  async generateAssets() {
+    return await this.executeHooks(HookLifecycleStep.GENERATE);
   }
 
   async build() {
-    return await this.handleHooks(HookLifecycleStep.BUILD);
+    return await this.executeHooks(HookLifecycleStep.BUILD);
   }
 
   async clean() {
-    this.handleHooks(HookLifecycleStep.CLEAN);
+    this.executeHooks(HookLifecycleStep.CLEAN);
     const hugoModClean = this.reportShellCmd(`hugox mod clean --all`);
     await shell.runShellCommand(hugoModClean, {
-      ...(this.isVerbose
+      ...(this.options.isVerbose
         ? shell.cliVerboseShellOutputOptions
         : shell.quietShellOutputOptions),
-      dryRun: this.isDryRun,
+      dryRun: this.options.isDryRun,
     });
     ["go.sum", "public", "resources"].forEach((f) => {
       if (fs.existsSync(f)) {
-        if (this.isDryRun) {
+        if (this.options.isDryRun) {
           console.log("delete", colors.red(f));
         } else {
           Deno.removeSync(f, { recursive: true });
-          if (this.isVerbose) console.log(colors.red(`deleted ${f}`));
+          if (this.options.isVerbose) console.log(colors.red(`deleted ${f}`));
         }
       }
     });
@@ -461,16 +603,19 @@ export class PublishCommandHandlerContext {
    * library to be present in the PATH.
    */
   async update() {
+    const denoModules = this.pluginsMgr.plugins.filter((p) =>
+      isHookModulePlugin(p)
+    ).map((p) => p.source.systemID);
     const updatePkgs = this.reportShellCmd(
-      `udd pubctl.ts ${this.getHookModuleRelNames().join(" ")}`,
+      `udd pubctl.ts ${denoModules.join(" ")}`,
     );
     await shell.runShellCommand(updatePkgs, {
-      ...(this.isVerbose
+      ...(this.options.isVerbose
         ? shell.cliVerboseShellOutputOptions
         : shell.quietShellOutputOptions),
-      dryRun: this.isDryRun,
+      dryRun: this.options.isDryRun,
     });
-    this.handleHooks(HookLifecycleStep.UPDATE);
+    this.executeHooks(HookLifecycleStep.UPDATE);
   }
 
   suggestFileName(source: string): string {
@@ -482,7 +627,10 @@ export class PublishCommandHandlerContext {
       fileNameIssues: [],
     };
     for (const we of fs.walkSync(root, { skip: [/\.git/, /README.md/] })) {
-      const dirName = path.relative(this.projectHome, path.dirname(we.path));
+      const dirName = path.relative(
+        this.options.projectHome,
+        path.dirname(we.path),
+      );
       let issue: PublishLintFileNameIssue;
       const addIssue = (suggestedCmd: string, diagnostic: string) => {
         if (!issue) {
@@ -518,7 +666,7 @@ export class PublishCommandHandlerContext {
 export async function validateHooksHandler(
   ctx: PublishCommandHandlerContext,
 ): Promise<true | void> {
-  const { "validate": validate, "hooks": hooks } = ctx.cliOptions;
+  const { "validate": validate, "hooks": hooks } = ctx.options.cliOptions;
   if (validate && hooks) {
     await ctx.validateHooks();
     return true;
@@ -528,9 +676,9 @@ export async function validateHooksHandler(
 export async function inspectHandler(
   ctx: PublishCommandHandlerContext,
 ): Promise<true | void> {
-  const { "inspect": inspect } = ctx.cliOptions;
+  const { "inspect": inspect } = ctx.options.cliOptions;
   if (inspect) {
-    await ctx.handleHooks(HookLifecycleStep.INSPECT);
+    await ctx.executeHooks(HookLifecycleStep.INSPECT);
     return true;
   }
 }
@@ -539,9 +687,10 @@ export async function inspectHandler(
 export async function lintHandler(
   ctx: PublishCommandHandlerContext,
 ): Promise<true | void> {
-  const { "lint": lint, "--cli-suggestions": cliSuggestions } = ctx.cliOptions;
+  const { "lint": lint, "--cli-suggestions": cliSuggestions } =
+    ctx.options.cliOptions;
   if (lint) {
-    const results = ctx.lint(ctx.projectHome);
+    const results = ctx.lint(ctx.options.projectHome);
     if (cliSuggestions) {
       for (const fni of results.fileNameIssues) {
         for (const diag of fni.diagnostics) {
@@ -552,7 +701,7 @@ export async function lintHandler(
       }
     } else {
       for (const fni of results.fileNameIssues) {
-        const relPath = path.relative(ctx.projectHome, fni.file.path);
+        const relPath = path.relative(ctx.options.projectHome, fni.file.path);
         console.log(`${colors.yellow(relPath)}:`);
         for (const diag of fni.diagnostics) {
           console.log(`    ${colors.red(diag.diagnostic)}`);
@@ -562,7 +711,7 @@ export async function lintHandler(
         }
       }
     }
-    ctx.handleHooks(HookLifecycleStep.LINT);
+    ctx.executeHooks(HookLifecycleStep.LINT);
     return true;
   }
 }
@@ -570,7 +719,7 @@ export async function lintHandler(
 export async function generateHandler(
   ctx: PublishCommandHandlerContext,
 ): Promise<true | void> {
-  const { "generate": generate } = ctx.cliOptions;
+  const { "generate": generate } = ctx.options.cliOptions;
   if (generate) {
     await ctx.generateAssets();
     return true;
@@ -580,7 +729,7 @@ export async function generateHandler(
 export async function buildHandler(
   ctx: PublishCommandHandlerContext,
 ): Promise<true | void> {
-  const { "build": build, "<target>": targets } = ctx.cliOptions;
+  const { "build": build } = ctx.options.cliOptions;
   if (build) {
     await ctx.build();
     return true;
@@ -590,7 +739,7 @@ export async function buildHandler(
 export async function cleanHandler(
   ctx: PublishCommandHandlerContext,
 ): Promise<true | void> {
-  const { "clean": clean } = ctx.cliOptions;
+  const { "clean": clean } = ctx.options.cliOptions;
   if (clean) {
     await ctx.clean();
     return true;
@@ -600,9 +749,9 @@ export async function cleanHandler(
 export async function doctorHandler(
   ctx: PublishCommandHandlerContext,
 ): Promise<true | void> {
-  const { "doctor": doctor } = ctx.cliOptions;
+  const { "doctor": doctor } = ctx.options.cliOptions;
   if (doctor) {
-    await ctx.handleHooks(HookLifecycleStep.DOCTOR);
+    await ctx.executeHooks(HookLifecycleStep.DOCTOR);
     return true;
   }
 }
@@ -610,7 +759,7 @@ export async function doctorHandler(
 export async function updateHandler(
   ctx: PublishCommandHandlerContext,
 ): Promise<true | void> {
-  const { "update": update } = ctx.cliOptions;
+  const { "update": update } = ctx.options.cliOptions;
   if (update) {
     await ctx.update();
     return true;
@@ -620,10 +769,10 @@ export async function updateHandler(
 export async function versionHandler(
   ctx: PublishCommandHandlerContext,
 ): Promise<true | void> {
-  const { "version": version } = ctx.cliOptions;
+  const { "version": version } = ctx.options.cliOptions;
   if (version) {
     console.log(
-      `pubctl ${colors.yellow(ctx.chsOptions.version)}`,
+      `pubctl ${colors.yellow(ctx.options.chsOptions.version)}`,
     );
     console.log(
       `hugo-aide ${colors.yellow(await determineVersion(import.meta.url))}`,
@@ -647,14 +796,22 @@ export const commonHandlers = [
 export async function CLI(
   chsOptions: CommandHandlerSpecOptions,
 ): Promise<void> {
-  const { docoptSpec, customHandlers, prepareContext } = chsOptions;
+  const { docoptSpec, customHandlers, prepareOptions, prepareContext } =
+    chsOptions;
   try {
     const cliOptions = docopt.default(
       docoptSpec ? docoptSpec(chsOptions) : defaultDocoptSpec(chsOptions),
     );
+    const pchOptions = prepareOptions
+      ? prepareOptions(chsOptions, cliOptions)
+      : new PublishCommandHandlerOptions(chsOptions, cliOptions);
+    const pluginsMgr = new PublishCommandHandlerPluginsManager<
+      PublishCommandHandlerContext
+    >(pchOptions);
+    await pluginsMgr.init();
     const context = prepareContext
-      ? prepareContext(chsOptions, cliOptions)
-      : new PublishCommandHandlerContext(chsOptions, cliOptions);
+      ? prepareContext(pchOptions, pluginsMgr)
+      : new PublishCommandHandlerContext(pchOptions, pluginsMgr);
     let handled: true | void;
     if (customHandlers) {
       for (const handler of customHandlers) {
