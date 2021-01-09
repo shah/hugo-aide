@@ -5,7 +5,6 @@ import {
   heading,
   htmlTag,
   htmlTagFn,
-  hugoShortCode,
   hugoShortCodeFn,
   inlineCode,
   italic,

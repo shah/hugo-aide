@@ -1,8 +1,6 @@
 // source: https://github.com/skulptur/markdown-fns
 
-import * as yaml from "https://deno.land/std@0.80.0/encoding/yaml.ts";
-import * as toml from "https://deno.land/std@0.80.0/encoding/toml.ts";
-import { isArray } from "https://deno.land/std@0.80.0/encoding/_yaml/utils.ts";
+import { encodingTOML as toml, encodingYAML as yaml } from "./deps.ts";
 
 export const wrap = (wrapper: string, str: string) =>
   `${wrapper}${str}${wrapper}`;
@@ -37,7 +35,7 @@ export const hugoShortCode = (
       ? ""
       : (" " + (typeof sc[1] === "string"
         ? sc[1]
-        : (isArray(sc[1])
+        : (Array.isArray(sc[1])
           ? sc[1].join(" ")
           : Object.entries(sc[1]).map((e) =>
             `${e[0]}=${JSON.stringify(e[1])}`
@@ -73,7 +71,7 @@ export const htmlTag = (
       ? ""
       : (" " + (typeof ht[1] === "string"
         ? ht[1]
-        : (isArray(ht[1])
+        : (Array.isArray(ht[1])
           ? ht[1].join(" ")
           : Object.entries(ht[1]).map((e) =>
             `${e[0]}=${JSON.stringify(e[1])}`
