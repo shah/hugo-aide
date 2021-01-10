@@ -34,11 +34,12 @@ export interface CommandHandlerSpecOptions<
   readonly projectHome?: string;
   readonly docoptSpec?: (chsOptions: CommandHandlerSpecOptions) => string;
   readonly customHandlers?: PublishCommandHandler<C>[];
+  readonly enhanceHookContext?: (suggested: HookContext<C>) => HookContext<C>;
   readonly prepareOptions?: (
     chsOptions: CommandHandlerSpecOptions,
     cliOptions: docopt.DocOptions,
   ) => O;
-  readonly prepareContext?: (
+  readonly prepareCmdHandlerContext?: (
     options: O,
     pluginsMgr: PublishCommandHandlerPluginsManager<
       PublishCommandHandlerContext
@@ -53,6 +54,7 @@ export function defaultDocoptSpec(
 Publication Controller ${version}.
 
 Usage:
+  pubctl install [<target>]... [--project=<path>] [--hooks=<glob>]... [--dry-run] [--verbose] [--arg=<name>]... [--argv=<value>]...
   pubctl validate hooks [<target>]... [--project=<path>] [--hooks=<glob>]... [--dry-run] [--verbose] [--arg=<name>]... [--argv=<value>]...
   pubctl inspect [<target>]... [--project=<path>] [--hooks=<glob>]... [--arg=<name>]... [--argv=<value>]...
   pubctl lint [<target>]... [--project=<path>] [--cli-suggestions] [--hooks=<glob>]... [--arg=<name>]... [--argv=<value>]...
@@ -82,6 +84,7 @@ export interface PublishCommandHandler<T extends PublishCommandHandlerContext> {
 }
 
 export enum HookLifecycleStep {
+  INSTALL = "install",
   DOCTOR = "doctor",
   LINT = "lint",
   BUILD = "build",
@@ -106,29 +109,48 @@ export function isHookContext<T extends PublishCommandHandlerContext>(
   return false;
 }
 
-export interface HookModulePlugin<T extends PublishCommandHandlerContext>
-  extends pl.DenoModulePlugin {
-  readonly handler: HookModuleHandler<T>;
-  readonly isAsync: boolean;
+// deno-lint-ignore require-await
+export async function defaultPubCtlHook<
+  T extends PublishCommandHandlerContext,
+>(hc: HookContext<T>): Promise<pl.DenoFunctionModuleHandlerResult> {
+  return defaultPubCtlHookSync(hc);
 }
 
-export function isHookModulePlugin<T extends PublishCommandHandlerContext>(
-  o: unknown,
-): o is HookModulePlugin<T> {
-  if (pl.isDenoModulePlugin(o)) {
-    return "handler" in o && "isAsync" in o;
+export function defaultPubCtlHookSync<
+  T extends PublishCommandHandlerContext,
+>(hc: HookContext<T>): pl.DenoFunctionModuleHandlerResult {
+  switch (hc.step) {
+    case HookLifecycleStep.INSTALL:
+    case HookLifecycleStep.DOCTOR:
+      console.log("No external dependencies");
+      return defaultPubCtlHookResultEnhancer(hc);
+
+    case HookLifecycleStep.GENERATE:
+    case HookLifecycleStep.BUILD:
+    case HookLifecycleStep.INSPECT:
+    case HookLifecycleStep.CLEAN:
+    case HookLifecycleStep.LINT:
+    case HookLifecycleStep.UPDATE:
+      console.log(`${hc.step} not implemented`);
+      return defaultPubCtlHookResultEnhancer(hc);
   }
-  return false;
 }
 
-// deno-lint-ignore no-empty-interface
-export interface HookModuleHandlerResult {
-}
-
-export interface HookModuleHandler<T extends PublishCommandHandlerContext> {
-  (
-    hc: HookContext<T>,
-  ): Promise<HookModuleHandlerResult> | HookModuleHandlerResult;
+/**
+ * defaultPubCtlHookResultEnhancer should be called by all Deno TypeScript
+ * hooks so that we can do centralized "enhancing" of the results of any
+ * hook. This allows logging, middleware, and other standard function 
+ * handling capabilities.
+ * @param dfmhResult 
+ */
+export function defaultPubCtlHookResultEnhancer<
+  T extends PublishCommandHandlerContext,
+>(
+  hc: HookContext<T>,
+  dfmhResult?: pl.DenoFunctionModuleHandlerResult,
+): pl.DenoFunctionModuleHandlerResult {
+  if (!dfmhResult) return {};
+  return dfmhResult;
 }
 
 export interface PublishLintFileNameIssueDiagnostic {
@@ -286,49 +308,7 @@ export class PublishCommandHandlerPluginsManager<
         },
       },
       typeScriptFileRegistryOptions: {
-        isValidModule: (
-          potential: pl.DenoModulePlugin,
-        ): pl.InvalidPluginRegistration | pl.ValidPluginRegistration => {
-          if (!pl.isDiscoverFileSystemPluginSource(potential.source)) {
-            throw new Error(
-              "potential.source must be DiscoverFileSystemPluginSource",
-            );
-          }
-
-          // deno-lint-ignore no-explicit-any
-          const module = potential.module as any;
-          if (this.options.isVerbose) {
-            console.log(
-              colors.yellow(potential.source.friendlyName),
-              module ? colors.green("imported") : colors.red("not imported"),
-            );
-          }
-          if (typeof module.default === "function") {
-            const handler = module.default as HookModuleHandler<
-              PublishCommandHandlerContext
-            >;
-            const isAsync = handler.constructor.name === "AsyncFunction";
-            const plugin: HookModulePlugin<T> = {
-              ...potential,
-              handler,
-              isAsync,
-            };
-            const result: pl.ValidPluginRegistration = {
-              source: potential.source,
-              plugin,
-            };
-            return result;
-          } else {
-            const result: pl.InvalidPluginRegistration = {
-              source: potential.source,
-              issues: [{
-                source: potential.source,
-                diagnostics: [`does not have a default function`],
-              }],
-            };
-            return result;
-          }
-        },
+        validateModule: pl.denoFunctionModuleHandlerRegistrationSupplier(),
       },
     });
   }
@@ -361,22 +341,25 @@ export class PublishCommandHandlerContext implements pl.PluginContainer {
     let firstValid = true;
     for (const hook of this.pluginsMgr.plugins) {
       if (firstValid) {
-        console.log(colors.green("-- Registered hooks --"));
+        console.log("--", colors.brightCyan("Registered hooks"), "--");
         firstValid = false;
       }
-      const pc: HookContext<PublishCommandHandlerContext> = {
+      const suggestedHookCtx: HookContext<PublishCommandHandlerContext> = {
         container: this,
         plugin: hook,
         pubCtlCtx: this,
         step: HookLifecycleStep.DOCTOR,
       };
+      const hookCtx = this.options.chsOptions.enhanceHookContext
+        ? this.options.chsOptions.enhanceHookContext(suggestedHookCtx)
+        : suggestedHookCtx;
       if (pl.isShellExePlugin<PublishCommandHandlerContext>(hook)) {
         if (hook.envVars) {
           console.log(
             colors.yellow(hook.source.friendlyName),
             colors.green(hook.nature.identity),
             colors.blue("will be called with environment variables"),
-            hook.envVars(pc),
+            hook.envVars(hookCtx),
           );
         } else {
           console.log(
@@ -384,10 +367,10 @@ export class PublishCommandHandlerContext implements pl.PluginContainer {
             colors.green(hook.nature.identity),
           );
         }
-        console.log(colors.dim(hook.shellCmd(pc).join(" ")));
+        console.log(colors.dim(hook.shellCmd(hookCtx).join(" ")));
         continue;
       }
-      if (isHookModulePlugin(hook)) {
+      if (pl.isDenoFunctionModulePlugin(hook)) {
         console.log(
           colors.yellow(hook.source.friendlyName),
           colors.green(hook.nature.identity),
@@ -399,7 +382,11 @@ export class PublishCommandHandlerContext implements pl.PluginContainer {
     let firstInvalid = true;
     for (const ipr of this.pluginsMgr.invalidPlugins) {
       if (firstInvalid) {
-        console.log(colors.green("-- Hooks that could not be registered --"));
+        console.log(
+          "--",
+          colors.red("Hooks that could not be registered"),
+          "--",
+        );
         firstInvalid = false;
       }
       console.log(colors.yellow(ipr.source.systemID));
@@ -424,149 +411,29 @@ export class PublishCommandHandlerContext implements pl.PluginContainer {
         );
         continue;
       }
-      const pc: HookContext<PublishCommandHandlerContext> = {
+      const suggestedHookCtx: HookContext<PublishCommandHandlerContext> = {
         container: this,
         plugin: hook,
         pubCtlCtx: this,
         step,
       };
+      const hookCtx = this.options.chsOptions.enhanceHookContext
+        ? this.options.chsOptions.enhanceHookContext(suggestedHookCtx)
+        : suggestedHookCtx;
       console.log(colors.yellow(hook.source.friendlyName));
       if (pl.isActionPlugin<PublishCommandHandlerContext>(hook)) {
-        hook.execute(pc);
+        hook.execute(hookCtx);
         continue;
       }
-      if (isHookModulePlugin(hook)) {
+      if (pl.isDenoFunctionModulePlugin(hook)) {
         if (hook.isAsync) {
-          await hook.handler(pc);
+          await hook.handler(hookCtx);
         } else {
-          hook.handler(pc);
+          hook.handler(hookCtx);
         }
       }
     }
   }
-
-  /**
-   * Finds and executes hooks. Hooks are either executable shell scripts
-   * or Deno modules that are dynamically imported and then "executed" by 
-   * calling the default function.
-   * 
-   * Here's what an example hook looks like in Deno TypeScript:
-   * ---------------------------------------------------------
-   * import * as haPublish from "https://denopkg.com/shah/hugo-aide@v0.2.5/publish.ts";
-   * export async function buildHook(
-   *   ctx: haPublish.PublishCommandHandlerContext,
-   *   step: haPublish.BuildLifecycleStep,
-   * ): Promise<false | number | void> {
-   *   console.log(step, "in", import.meta.url, ctx);
-   * }
-   * export default buildHook;
-   * @param step The build lifecylce being executed
-   */
-  // async handleHooks(step: HookLifecycleStep): Promise<string[]> {
-  //   const result = [];
-  //   for (const glob of this.hooksGlobs) {
-  //     for (const we of fs.expandGlobSync(glob)) {
-  //       if (we.isFile) {
-  //         const prepModuleName = path.relative(this.projectHome, we.path);
-  //         const env = this.subprocessEnvVars(we.path, step);
-
-  //         if (path.extname(we.name) != ".ts") {
-  //           if (this.isExecutable(we.path)) {
-  //             const blockHeader =
-  //               (): shell.CliVerboseShellBlockHeaderResult => {
-  //                 return {
-  //                   headerText: `${prepModuleName}`,
-  //                   separatorText: "",
-  //                 };
-  //               };
-
-  //             const cmd = [
-  //               "/bin/sh",
-  //               "-c",
-  //               ...shell.commandComponents(we.path),
-  //               step,
-  //             ];
-  //             for (const arg of Object.entries(this.arguments)) {
-  //               const [name, value] = arg;
-  //               cmd.push(name, value);
-  //             }
-  //             await shell.runShellCommand(
-  //               {
-  //                 cmd: cmd,
-  //                 cwd: path.dirname(we.path),
-  //                 env: env,
-  //               },
-  //               {
-  //                 // the subprocess is responsible for checking verbose/dry-run
-  //                 ...shell.cliVerboseShellBlockOutputOptions(blockHeader),
-  //               },
-  //             );
-  //           } else {
-  //             console.log(
-  //               colors.yellow(prepModuleName),
-  //               colors.brightRed("not executable"),
-  //             );
-  //           }
-  //           continue;
-  //         }
-
-  //         console.log(colors.yellow(path.relative(this.projectHome, we.path)));
-  //         try {
-  //           // the hugo-aide package is going to be URL-imported but the files
-  //           // we're importing are local to the calling pubctl.ts in the project
-  //           // so we need to use absolute paths
-  //           const module = await import(
-  //             path.toFileUrl(we.path).toString()
-  //           );
-  //           if (this.isVerbose) {
-  //             console.log(
-  //               step,
-  //               colors.yellow(prepModuleName),
-  //               module ? colors.green("imported") : colors.red("not imported"),
-  //             );
-  //           }
-  //           if (typeof module.default === "function") {
-  //             const handler = module.default as HookModuleHandler<
-  //               PublishCommandHandlerContext
-  //             >;
-  //             const isAsync = handler.constructor.name === "AsyncFunction";
-  //             const hmCtx: HookModuleContext = {
-  //               name: we.name,
-  //               absPathOnly: path.dirname(we.path),
-  //               absPathAndName: we.path,
-  //               pathRelToProject: path.relative(this.projectHome, we.path),
-  //               pathRelToCwd: path.relative(Deno.cwd(), we.path),
-  //             };
-  //             if (isAsync) {
-  //               await handler(step, hmCtx, this);
-  //             } else {
-  //               handler(step, hmCtx, this);
-  //             }
-  //             if (this.isVerbose) {
-  //               console.log(
-  //                 step,
-  //                 colors.yellow(prepModuleName),
-  //                 colors.green("executed"),
-  //                 colors.blue(isAsync ? "(async)" : "(sync)"),
-  //               );
-  //             }
-  //           } else {
-  //             console.log(
-  //               colors.brightRed(
-  //                 `${prepModuleName} does not have a default function`,
-  //               ),
-  //             );
-  //           }
-  //         } catch (err) {
-  //           console.log(colors.brightRed(prepModuleName));
-  //           console.log(err);
-  //         }
-  //         result.push(prepModuleName);
-  //       }
-  //     }
-  //   }
-  //   return result;
-  // }
 
   async generateAssets() {
     return await this.executeHooks(HookLifecycleStep.GENERATE);
@@ -577,7 +444,7 @@ export class PublishCommandHandlerContext implements pl.PluginContainer {
   }
 
   async clean() {
-    this.executeHooks(HookLifecycleStep.CLEAN);
+    await this.executeHooks(HookLifecycleStep.CLEAN);
     const hugoModClean = this.reportShellCmd(`hugox mod clean --all`);
     await shell.runShellCommand(hugoModClean, {
       ...(this.options.isVerbose
@@ -588,7 +455,7 @@ export class PublishCommandHandlerContext implements pl.PluginContainer {
     ["go.sum", "public", "resources"].forEach((f) => {
       if (fs.existsSync(f)) {
         if (this.options.isDryRun) {
-          console.log("delete", colors.red(f));
+          console.log("rm -f", colors.red(f));
         } else {
           Deno.removeSync(f, { recursive: true });
           if (this.options.isVerbose) console.log(colors.red(`deleted ${f}`));
@@ -604,7 +471,7 @@ export class PublishCommandHandlerContext implements pl.PluginContainer {
    */
   async update() {
     const denoModules = this.pluginsMgr.plugins.filter((p) =>
-      isHookModulePlugin(p)
+      pl.isDenoFunctionModulePlugin(p)
     ).map((p) => p.source.systemID);
     const updatePkgs = this.reportShellCmd(
       `udd pubctl.ts ${denoModules.join(" ")}`,
@@ -663,12 +530,23 @@ export class PublishCommandHandlerContext implements pl.PluginContainer {
   }
 }
 
+export async function installHandler(
+  ctx: PublishCommandHandlerContext,
+): Promise<true | void> {
+  const { "install": install } = ctx.options.cliOptions;
+  if (install) {
+    await ctx.executeHooks(HookLifecycleStep.INSTALL);
+    return true;
+  }
+}
+
+// deno-lint-ignore require-await
 export async function validateHooksHandler(
   ctx: PublishCommandHandlerContext,
 ): Promise<true | void> {
   const { "validate": validate, "hooks": hooks } = ctx.options.cliOptions;
   if (validate && hooks) {
-    await ctx.validateHooks();
+    ctx.validateHooks();
     return true;
   }
 }
@@ -711,6 +589,8 @@ export async function lintHandler(
         }
       }
     }
+    // TODO: this needs to be integrated into ctx.lint() such that each hook
+    // can "contribute" lint results -- perhaps use github.com/shah/ts-inspect?
     ctx.executeHooks(HookLifecycleStep.LINT);
     return true;
   }
@@ -782,6 +662,7 @@ export async function versionHandler(
 }
 
 export const commonHandlers = [
+  installHandler,
   validateHooksHandler,
   inspectHandler,
   lintHandler,
@@ -796,8 +677,12 @@ export const commonHandlers = [
 export async function CLI(
   chsOptions: CommandHandlerSpecOptions,
 ): Promise<void> {
-  const { docoptSpec, customHandlers, prepareOptions, prepareContext } =
-    chsOptions;
+  const {
+    docoptSpec,
+    customHandlers,
+    prepareOptions,
+    prepareCmdHandlerContext: prepareContext,
+  } = chsOptions;
   try {
     const cliOptions = docopt.default(
       docoptSpec ? docoptSpec(chsOptions) : defaultDocoptSpec(chsOptions),

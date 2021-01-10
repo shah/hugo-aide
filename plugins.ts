@@ -207,16 +207,7 @@ export function shellFileRegistrar<T extends PluginContainer>(
     const fi = Deno.statSync(path);
     const isExe = fi.mode != null ? (fi.mode & 0o0001 ? true : false) : true;
     if (isExe) {
-      const cmd = ["/bin/sh", "-c", path];
-      // if (step) cmd.push(step);
-      // if (this.targets.length > 0) cmd.push(...this.targets);
-      // if (this.isVerbose) cmd.push("--verbose");
-      // if (this.isDryRun) cmd.push("--dry-run");
-      // for (const arg of Object.entries(this.arguments)) {
-      //   const [name, value] = arg;
-      //   cmd.push(name, value);
-      // }
-      return cmd;
+      return ["/bin/sh", "-c", path];
     }
     return false;
   };
@@ -280,10 +271,14 @@ export function shellFileRegistrar<T extends PluginContainer>(
   };
 }
 
-export interface TypeScriptRegistrarOptions {
-  readonly isValidModule: (
+export interface TypeScriptModuleRegistrationSupplier {
+  (
     potential: DenoModulePlugin,
-  ) => ValidPluginRegistration | InvalidPluginRegistration;
+  ): ValidPluginRegistration | InvalidPluginRegistration;
+}
+
+export interface TypeScriptRegistrarOptions {
+  readonly validateModule: TypeScriptModuleRegistrationSupplier;
 }
 
 export function typeScriptFileRegistrar(
@@ -304,7 +299,7 @@ export function typeScriptFileRegistrar(
             source,
             nature: { identity: "deno-module" },
           };
-          return tsro.isValidModule(potential);
+          return tsro.validateModule(potential);
         } else {
           const result: InvalidPluginRegistration = {
             source,
@@ -378,6 +373,9 @@ export async function discoverFileSystemPlugins<T extends PluginContainer>(
   for (const glob of globs) {
     for (const we of fs.expandGlobSync(glob, { root: options.discoveryPath })) {
       if (we.isFile) {
+        // TODO: if the same plugin is discovered under multiple globs, only
+        // maintain a single plugin
+
         const dfspSrc: DiscoverFileSystemPluginSource = {
           discoveryPath: homePath,
           glob,
@@ -403,4 +401,64 @@ export async function discoverFileSystemPlugins<T extends PluginContainer>(
       }
     }
   }
+}
+
+export interface DenoFunctionModulePlugin<T extends PluginContainer>
+  extends DenoModulePlugin {
+  readonly handler: DenoFunctionModuleHandler<T>;
+  readonly isAsync: boolean;
+}
+
+export function isDenoFunctionModulePlugin<T extends PluginContainer>(
+  o: unknown,
+): o is DenoFunctionModulePlugin<T> {
+  if (isDenoModulePlugin(o)) {
+    return "handler" in o && "isAsync" in o;
+  }
+  return false;
+}
+
+// deno-lint-ignore no-empty-interface
+export interface DenoFunctionModuleHandlerResult {
+}
+
+export interface DenoFunctionModuleHandler<T extends PluginContainer> {
+  (
+    pc: PluginContext<T>,
+  ): Promise<DenoFunctionModuleHandlerResult> | DenoFunctionModuleHandlerResult;
+}
+
+export function denoFunctionModuleHandlerRegistrationSupplier<
+  T extends PluginContainer,
+>(): TypeScriptModuleRegistrationSupplier {
+  return (
+    potential: DenoModulePlugin,
+  ): ValidPluginRegistration | InvalidPluginRegistration => {
+    // deno-lint-ignore no-explicit-any
+    const module = potential.module as any;
+    if (typeof module.default === "function") {
+      const handler = module.default as DenoFunctionModuleHandler<T>;
+      const isAsync = handler.constructor.name === "AsyncFunction";
+      const plugin: DenoFunctionModulePlugin<T> = {
+        ...potential,
+        nature: { identity: "deno-module-function" },
+        handler,
+        isAsync,
+      };
+      const result: ValidPluginRegistration = {
+        source: potential.source,
+        plugin,
+      };
+      return result;
+    } else {
+      const result: InvalidPluginRegistration = {
+        source: potential.source,
+        issues: [{
+          source: potential.source,
+          diagnostics: [`does not have a default function`],
+        }],
+      };
+      return result;
+    }
+  };
 }
