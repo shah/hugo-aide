@@ -470,9 +470,9 @@ export class PublishCommandHandlerContext implements pl.PluginContainer {
    * library to be present in the PATH.
    */
   async update() {
-    const denoModules = this.pluginsMgr.plugins.filter((p) =>
-      pl.isDenoFunctionModulePlugin(p)
-    ).map((p) => p.source.systemID);
+    const denoModules = this.pluginsMgr.plugins.filter((p) => {
+      return pl.isDenoModulePlugin(p) ? true : false;
+    }).map((p) => p.source.systemID);
     const updatePkgs = this.reportShellCmd(
       `udd pubctl.ts ${denoModules.join(" ")}`,
     );
