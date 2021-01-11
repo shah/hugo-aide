@@ -12,6 +12,7 @@ import {
   docopt,
   fs,
   govnSvcVersion as gsv,
+  inspect as insp,
   path,
   shell,
 } from "./deps.ts";
@@ -56,8 +57,8 @@ Publication Controller ${version}.
 Usage:
   pubctl install [<target>]... [--project=<path>] [--hooks=<glob>]... [--dry-run] [--verbose] [--arg=<name>]... [--argv=<value>]...
   pubctl validate hooks [<target>]... [--project=<path>] [--hooks=<glob>]... [--dry-run] [--verbose] [--arg=<name>]... [--argv=<value>]...
+  pubctl describe [<target>]... [--project=<path>] [--hooks=<glob>]... [--arg=<name>]... [--argv=<value>]...
   pubctl inspect [<target>]... [--project=<path>] [--hooks=<glob>]... [--arg=<name>]... [--argv=<value>]...
-  pubctl lint [<target>]... [--project=<path>] [--cli-suggestions] [--hooks=<glob>]... [--arg=<name>]... [--argv=<value>]...
   pubctl build [<target>]... [--schedule=<cronSpec>] [--project=<path>] [--hooks=<glob>]... [--dry-run] [--verbose] [--arg=<name>]... [--argv=<value>]...
   pubctl generate [<target>]... [--schedule=<cronSpec>] [--project=<path>] [--hooks=<glob>]... [--dry-run] [--verbose] [--arg=<name>]... [--argv=<value>]...
   pubctl clean [<target>]... [--project=<path>] [--hooks=<glob>]... [--dry-run] [--verbose] [--arg=<name>]... [--argv=<value>]...
@@ -84,9 +85,9 @@ export interface PublishCommandHandler<T extends PublishCommandHandlerContext> {
 }
 
 export enum HookLifecycleStep {
+  DESCRIBE = "describe",
   INSTALL = "install",
   DOCTOR = "doctor",
-  LINT = "lint",
   BUILD = "build",
   INSPECT = "inspect",
   GENERATE = "generate",
@@ -95,9 +96,16 @@ export enum HookLifecycleStep {
 }
 
 export interface HookContext<T extends PublishCommandHandlerContext>
-  extends pl.PluginContext<PublishCommandHandlerContext> {
+  extends
+    pl.PluginContext<PublishCommandHandlerContext>,
+    insp.InspectionContext {
   readonly pubCtlCtx: T;
   readonly step: HookLifecycleStep;
+  readonly onInspectionDiags?: (
+    // deno-lint-ignore no-explicit-any
+    id: insp.InspectionDiagnostics<any, Error>,
+    suggestedCategory?: string,
+  ) => void;
 }
 
 export function isHookContext<T extends PublishCommandHandlerContext>(
@@ -125,11 +133,11 @@ export function defaultPubCtlHookSync<
       console.log("No external dependencies");
       return defaultPubCtlHookResultEnhancer(hc);
 
+    case HookLifecycleStep.DESCRIBE:
     case HookLifecycleStep.GENERATE:
     case HookLifecycleStep.BUILD:
     case HookLifecycleStep.INSPECT:
     case HookLifecycleStep.CLEAN:
-    case HookLifecycleStep.LINT:
     case HookLifecycleStep.UPDATE:
       console.log(`${hc.step} not implemented`);
       return defaultPubCtlHookResultEnhancer(hc);
@@ -151,20 +159,6 @@ export function defaultPubCtlHookResultEnhancer<
 ): pl.DenoFunctionModuleHandlerResult {
   if (!dfmhResult) return {};
   return dfmhResult;
-}
-
-export interface PublishLintFileNameIssueDiagnostic {
-  readonly diagnostic: string;
-  readonly correctionLinuxCmd?: string;
-}
-
-export interface PublishLintFileNameIssue {
-  readonly file: fs.WalkEntry;
-  readonly diagnostics: PublishLintFileNameIssueDiagnostic[];
-}
-
-export interface PublishLintResults {
-  readonly fileNameIssues: PublishLintFileNameIssue[];
 }
 
 export class PublishCommandHandlerOptions {
@@ -308,22 +302,31 @@ export class PublishCommandHandlerPluginsManager<
         },
       },
       typeScriptFileRegistryOptions: {
-        validateModule: pl.denoFunctionModuleHandlerRegistrationSupplier(),
+        validateModule: pl.registerDenoFunctionModule,
       },
     });
+
+    const registration = pl.registerDenoFunctionModule({
+      module: await import("./plugins/inspect-project-common.ts"),
+      source: {
+        systemID: "./plugins/inspect-project-common.ts",
+        friendlyName: "stdlib:plugins/inspect-project-common.ts",
+      },
+      nature: { identity: "deno-module-function" },
+    });
+    if (pl.isValidPluginRegistration(registration)) {
+      this.plugins.push(registration.plugin);
+    }
   }
 }
 
-export class PublishCommandHandlerContext implements pl.PluginContainer {
+export class PublishCommandHandlerContext implements pl.PluginExecutive {
   constructor(
     readonly options: PublishCommandHandlerOptions,
     readonly pluginsMgr: PublishCommandHandlerPluginsManager<
       PublishCommandHandlerContext
     >,
   ) {
-  }
-
-  async init(): Promise<void> {
   }
 
   reportShellCmd(cmd: string): string {
@@ -392,8 +395,7 @@ export class PublishCommandHandlerContext implements pl.PluginContainer {
       console.log(colors.yellow(ipr.source.systemID));
       for (const issue of ipr.issues) {
         console.warn(
-          "* ",
-          issue.diagnostics.map((d) => colors.red(d.toString())),
+          issue.diagnostics.map((d) => colors.red(d.toString())).join("\n"),
         );
       }
     }
@@ -401,16 +403,6 @@ export class PublishCommandHandlerContext implements pl.PluginContainer {
 
   async executeHooks(step: HookLifecycleStep): Promise<void> {
     for (const hook of this.pluginsMgr.plugins) {
-      if (!pl.isDiscoverFileSystemPluginSource(hook.source)) {
-        console.warn(
-          colors.brightRed(
-            `executeHooks(${step}) found a non-DiscoverFileSystemPluginSource:`,
-          ),
-          colors.blue(hook.nature.identity),
-          colors.yellow(hook.source.systemID),
-        );
-        continue;
-      }
       const suggestedHookCtx: HookContext<PublishCommandHandlerContext> = {
         container: this,
         plugin: hook,
@@ -420,17 +412,15 @@ export class PublishCommandHandlerContext implements pl.PluginContainer {
       const hookCtx = this.options.chsOptions.enhanceHookContext
         ? this.options.chsOptions.enhanceHookContext(suggestedHookCtx)
         : suggestedHookCtx;
-      console.log(colors.yellow(hook.source.friendlyName));
+      console.log(
+        colors.yellow(hook.source.friendlyName),
+        colors.dim(`[execute(${step})]`),
+      );
       if (pl.isActionPlugin<PublishCommandHandlerContext>(hook)) {
-        hook.execute(hookCtx);
+        await hook.execute(hookCtx);
         continue;
-      }
-      if (pl.isDenoFunctionModulePlugin(hook)) {
-        if (hook.isAsync) {
-          await hook.handler(hookCtx);
-        } else {
-          hook.handler(hookCtx);
-        }
+      } else {
+        console.log(colors.dim(`[executeHooks(${step})] not an Action plugin`));
       }
     }
   }
@@ -484,50 +474,6 @@ export class PublishCommandHandlerContext implements pl.PluginContainer {
     });
     this.executeHooks(HookLifecycleStep.UPDATE);
   }
-
-  suggestFileName(source: string): string {
-    return source.trim().replaceAll(/ +/g, "-").toLocaleLowerCase();
-  }
-
-  lint(root: string): PublishLintResults {
-    const result: PublishLintResults = {
-      fileNameIssues: [],
-    };
-    for (const we of fs.walkSync(root, { skip: [/\.git/, /README.md/] })) {
-      const dirName = path.relative(
-        this.options.projectHome,
-        path.dirname(we.path),
-      );
-      let issue: PublishLintFileNameIssue;
-      const addIssue = (suggestedCmd: string, diagnostic: string) => {
-        if (!issue) {
-          issue = {
-            file: we,
-            diagnostics: [],
-          };
-          result.fileNameIssues.push(issue);
-        }
-        issue.diagnostics.push(
-          { diagnostic: diagnostic, correctionLinuxCmd: suggestedCmd },
-        );
-      };
-
-      if (we.name.includes(" ")) {
-        addIssue(
-          `(cd ${dirName}; mv "${we.name}" ${this.suggestFileName(we.name)})`,
-          `should be renamed because it has spaces (replace all spaces with hyphens '-')`,
-        );
-      }
-
-      if (we.name != we.name.toLocaleLowerCase()) {
-        addIssue(
-          `(cd ${dirName}; mv "${we.name}" ${this.suggestFileName(we.name)})`,
-          `should be renamed because it has mixed case letters (all text should be lowercase only)`,
-        );
-      }
-    }
-    return result;
-  }
 }
 
 export async function installHandler(
@@ -561,40 +507,50 @@ export async function inspectHandler(
   }
 }
 
-// deno-lint-ignore require-await
-export async function lintHandler(
+export async function describeHandler(
   ctx: PublishCommandHandlerContext,
 ): Promise<true | void> {
-  const { "lint": lint, "--cli-suggestions": cliSuggestions } =
-    ctx.options.cliOptions;
-  if (lint) {
-    const results = ctx.lint(ctx.options.projectHome);
-    if (cliSuggestions) {
-      for (const fni of results.fileNameIssues) {
-        for (const diag of fni.diagnostics) {
-          if (diag.correctionLinuxCmd) {
-            console.log(diag.correctionLinuxCmd);
-          }
-        }
-      }
-    } else {
-      for (const fni of results.fileNameIssues) {
-        const relPath = path.relative(ctx.options.projectHome, fni.file.path);
-        console.log(`${colors.yellow(relPath)}:`);
-        for (const diag of fni.diagnostics) {
-          console.log(`    ${colors.red(diag.diagnostic)}`);
-          if (diag.correctionLinuxCmd) {
-            console.log(`    ${colors.green(diag.correctionLinuxCmd)}`);
-          }
-        }
-      }
-    }
-    // TODO: this needs to be integrated into ctx.lint() such that each hook
-    // can "contribute" lint results -- perhaps use github.com/shah/ts-inspect?
-    ctx.executeHooks(HookLifecycleStep.LINT);
+  const { "describe": describe } = ctx.options.cliOptions;
+  if (describe) {
+    await ctx.executeHooks(HookLifecycleStep.DESCRIBE);
     return true;
   }
 }
+
+// TODO: merge into `inspect`
+// export async function lintHandler(
+//   ctx: PublishCommandHandlerContext,
+// ): Promise<true | void> {
+//   const { "lint": lint, "--cli-suggestions": cliSuggestions } =
+//     ctx.options.cliOptions;
+//   if (lint) {
+//     const results = ctx.lint(ctx.options.projectHome);
+//     if (cliSuggestions) {
+//       for (const fni of results.fileNameIssues) {
+//         for (const diag of fni.diagnostics) {
+//           if (diag.correctionLinuxCmd) {
+//             console.log(diag.correctionLinuxCmd);
+//           }
+//         }
+//       }
+//     } else {
+//       for (const fni of results.fileNameIssues) {
+//         const relPath = path.relative(ctx.options.projectHome, fni.file.path);
+//         console.log(`${colors.yellow(relPath)}:`);
+//         for (const diag of fni.diagnostics) {
+//           console.log(`    ${colors.red(diag.diagnostic)}`);
+//           if (diag.correctionLinuxCmd) {
+//             console.log(`    ${colors.green(diag.correctionLinuxCmd)}`);
+//           }
+//         }
+//       }
+//     }
+//     // TODO: this needs to be integrated into ctx.lint() such that each hook
+//     // can "contribute" lint results -- perhaps use github.com/shah/ts-inspect?
+//     ctx.executeHooks(HookLifecycleStep.LINT);
+//     return true;
+//   }
+// }
 
 export async function generateHandler(
   ctx: PublishCommandHandlerContext,
@@ -662,10 +618,10 @@ export async function versionHandler(
 }
 
 export const commonHandlers = [
+  describeHandler,
   installHandler,
   validateHooksHandler,
   inspectHandler,
-  lintHandler,
   buildHandler,
   generateHandler,
   cleanHandler,

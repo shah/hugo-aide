@@ -1,7 +1,7 @@
 import { fs, path, safety, shell } from "./deps.ts";
 
 // deno-lint-ignore no-empty-interface
-export interface PluginContainer {
+export interface PluginExecutive {
 }
 
 export type PluginNatureIdentity = string;
@@ -67,12 +67,12 @@ export const isLocalFsPluginManager = safety.typeGuard<
   "localFsSources",
 );
 
-export interface PluginContext<T extends PluginContainer> {
+export interface PluginContext<T extends PluginExecutive> {
   readonly container: T;
   readonly plugin: Plugin;
 }
 
-export function isPluginContext<T extends PluginContainer>(
+export function isPluginContext<T extends PluginExecutive>(
   o: unknown,
 ): o is PluginContext<T> {
   const isPC = safety.typeGuard<PluginContext<T>>("container", "plugin");
@@ -108,15 +108,15 @@ export interface Plugin {
 
 export const isPlugin = safety.typeGuard<Plugin>("nature", "source");
 
-export interface ActionResult<T extends PluginContainer> {
+export interface ActionResult<T extends PluginExecutive> {
   readonly pc: PluginContext<T>;
 }
 
-export interface Action<T extends PluginContainer> {
+export interface Action<T extends PluginExecutive> {
   readonly execute: (pc: PluginContext<T>) => Promise<ActionResult<T>>;
 }
 
-export function isActionPlugin<T extends PluginContainer>(
+export function isActionPlugin<T extends PluginExecutive>(
   o: unknown,
 ): o is Plugin & Action<T> {
   if (isPlugin(o)) {
@@ -125,15 +125,15 @@ export function isActionPlugin<T extends PluginContainer>(
   return false;
 }
 
-export interface FilterResult<T extends PluginContainer> {
+export interface FilterResult<T extends PluginExecutive> {
   readonly pc: PluginContext<T>;
 }
 
-export interface Filter<T extends PluginContainer> {
+export interface Filter<T extends PluginExecutive> {
   readonly filter: (pc: PluginContext<T>) => Promise<FilterResult<T>>;
 }
 
-export function isFilterPlugin<T extends PluginContainer>(
+export function isFilterPlugin<T extends PluginExecutive>(
   o: unknown,
 ): o is Plugin & Filter<T> {
   if (isPlugin(o)) {
@@ -142,13 +142,13 @@ export function isFilterPlugin<T extends PluginContainer>(
   return false;
 }
 
-export interface ShellExePlugin<T extends PluginContainer>
+export interface ShellExePlugin<T extends PluginExecutive>
   extends Plugin, Action<T> {
   readonly shellCmd: (pc: PluginContext<T>) => string[];
   readonly envVars?: (pc: PluginContext<T>) => Record<string, string>;
 }
 
-export function isShellExePlugin<T extends PluginContainer>(
+export function isShellExePlugin<T extends PluginExecutive>(
   o: unknown,
 ): o is ShellExePlugin<T> {
   if (isPlugin(o)) {
@@ -175,7 +175,7 @@ export interface DiscoverPluginOptions {
   readonly nature: PluginNature;
 }
 
-export interface ShellFileRegistrarOptions<T extends PluginContainer> {
+export interface ShellFileRegistrarOptions<T extends PluginExecutive> {
   readonly envVarsSupplier?: (pc: PluginContext<T>) => Record<string, string>;
   readonly shellCmdEnhancer?: (
     pc: PluginContext<T>,
@@ -186,12 +186,12 @@ export interface ShellFileRegistrarOptions<T extends PluginContainer> {
   ) => shell.RunShellCommandOptions;
 }
 
-export interface ShellFileActionResult<T extends PluginContainer>
+export interface ShellFileActionResult<T extends PluginExecutive>
   extends ActionResult<T> {
   readonly rscResult: shell.RunShellCommandResult;
 }
 
-export function isShellFileActionResult<T extends PluginContainer>(
+export function isShellFileActionResult<T extends PluginExecutive>(
   o: unknown,
 ): o is ShellFileActionResult<T> {
   const isActionResult = safety.typeGuard<ShellFileActionResult<T>>(
@@ -200,7 +200,7 @@ export function isShellFileActionResult<T extends PluginContainer>(
   return isActionResult(o);
 }
 
-export function shellFileRegistrar<T extends PluginContainer>(
+export function shellFileRegistrar<T extends PluginExecutive>(
   options: ShellFileRegistrarOptions<T>,
 ): PluginRegistrar {
   const isExecutable = (path: string): false | string[] => {
@@ -333,7 +333,7 @@ export function typeScriptFileRegistrar(
   };
 }
 
-export function fileSystemPluginRegistrar<T extends PluginContainer>(
+export function fileSystemPluginRegistrar<T extends PluginExecutive>(
   src: FileSystemPluginSource,
   sfro: ShellFileRegistrarOptions<T>,
   tsro: TypeScriptRegistrarOptions,
@@ -356,7 +356,7 @@ export const isDiscoverFileSystemPluginSource = safety.typeGuard<
   DiscoverFileSystemPluginSource
 >("discoveryPath", "glob");
 
-export interface DiscoverFileSystemPluginsOptions<T extends PluginContainer> {
+export interface DiscoverFileSystemPluginsOptions<T extends PluginExecutive> {
   readonly discoveryPath: FileSystemPathOnly;
   readonly globs: FileSystemGlobs;
   readonly onValidPlugin: (vpr: ValidPluginRegistration) => void;
@@ -365,7 +365,7 @@ export interface DiscoverFileSystemPluginsOptions<T extends PluginContainer> {
   readonly typeScriptFileRegistryOptions: TypeScriptRegistrarOptions;
 }
 
-export async function discoverFileSystemPlugins<T extends PluginContainer>(
+export async function discoverFileSystemPlugins<T extends PluginExecutive>(
   options: DiscoverFileSystemPluginsOptions<T>,
 ): Promise<void> {
   const { discoveryPath: homePath, globs, onValidPlugin, onInvalidPlugin } =
@@ -403,13 +403,13 @@ export async function discoverFileSystemPlugins<T extends PluginContainer>(
   }
 }
 
-export interface DenoFunctionModulePlugin<T extends PluginContainer>
+export interface DenoFunctionModulePlugin<T extends PluginExecutive>
   extends DenoModulePlugin {
   readonly handler: DenoFunctionModuleHandler<T>;
   readonly isAsync: boolean;
 }
 
-export function isDenoFunctionModulePlugin<T extends PluginContainer>(
+export function isDenoFunctionModulePlugin<T extends PluginExecutive>(
   o: unknown,
 ): o is DenoFunctionModulePlugin<T> {
   if (isDenoModulePlugin(o)) {
@@ -422,43 +422,54 @@ export function isDenoFunctionModulePlugin<T extends PluginContainer>(
 export interface DenoFunctionModuleHandlerResult {
 }
 
-export interface DenoFunctionModuleHandler<T extends PluginContainer> {
+export interface DenoFunctionModuleHandler<T extends PluginExecutive> {
   (
     pc: PluginContext<T>,
   ): Promise<DenoFunctionModuleHandlerResult> | DenoFunctionModuleHandlerResult;
 }
 
-export function denoFunctionModuleHandlerRegistrationSupplier<
-  T extends PluginContainer,
->(): TypeScriptModuleRegistrationSupplier {
-  return (
-    potential: DenoModulePlugin,
-  ): ValidPluginRegistration | InvalidPluginRegistration => {
-    // deno-lint-ignore no-explicit-any
-    const module = potential.module as any;
-    if (typeof module.default === "function") {
-      const handler = module.default as DenoFunctionModuleHandler<T>;
-      const isAsync = handler.constructor.name === "AsyncFunction";
-      const plugin: DenoFunctionModulePlugin<T> = {
-        ...potential,
-        nature: { identity: "deno-module-function" },
-        handler,
-        isAsync,
-      };
-      const result: ValidPluginRegistration = {
+export interface DenoFunctionModuleActionResult<T extends PluginExecutive>
+  extends ActionResult<T> {
+  readonly dfmhResult: DenoFunctionModuleHandlerResult;
+}
+
+export function registerDenoFunctionModule<
+  T extends PluginExecutive,
+>(
+  potential: DenoModulePlugin,
+): ValidPluginRegistration | InvalidPluginRegistration {
+  // deno-lint-ignore no-explicit-any
+  const module = potential.module as any;
+  if (typeof module.default === "function") {
+    const handler = module.default as DenoFunctionModuleHandler<T>;
+    const isAsync = handler.constructor.name === "AsyncFunction";
+    const plugin: DenoFunctionModulePlugin<T> & Action<T> = {
+      ...potential,
+      nature: { identity: "deno-module-function" },
+      handler,
+      isAsync,
+      execute: async (pc: PluginContext<T>): Promise<ActionResult<T>> => {
+        const dfmhResult = isAsync ? await handler(pc) : handler(pc);
+        const actionResult: DenoFunctionModuleActionResult<T> = {
+          pc,
+          dfmhResult,
+        };
+        return actionResult;
+      },
+    };
+    const result: ValidPluginRegistration = {
+      source: potential.source,
+      plugin,
+    };
+    return result;
+  } else {
+    const result: InvalidPluginRegistration = {
+      source: potential.source,
+      issues: [{
         source: potential.source,
-        plugin,
-      };
-      return result;
-    } else {
-      const result: InvalidPluginRegistration = {
-        source: potential.source,
-        issues: [{
-          source: potential.source,
-          diagnostics: [`does not have a default function`],
-        }],
-      };
-      return result;
-    }
-  };
+        diagnostics: [`does not have a default function`],
+      }],
+    };
+    return result;
+  }
 }
