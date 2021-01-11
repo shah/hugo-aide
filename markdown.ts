@@ -1,5 +1,7 @@
 // source: https://github.com/skulptur/markdown-fns
 
+// TODO this module belongs in github.com/shah/ts-safe-template
+
 import { encodingTOML as toml, encodingYAML as yaml } from "./deps.ts";
 
 export const wrap = (wrapper: string, str: string) =>
