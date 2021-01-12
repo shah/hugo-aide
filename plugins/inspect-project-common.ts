@@ -1,5 +1,10 @@
-import { colors, fs, inspectAsset as ipa, path } from "../deps.ts";
-import * as pl from "../plugins.ts";
+import {
+  colors,
+  extend as ex,
+  fs,
+  inspectAsset as ipa,
+  path,
+} from "../deps.ts";
 import * as publ from "../publish.ts";
 
 export const inspectionDiagsCategory = "project.assets.filenames";
@@ -22,7 +27,7 @@ export async function inspectProjectAssetFileNames(
 
 export async function pubCtlHook(
   hc: publ.HookContext<publ.PublishCommandHandlerContext>,
-): Promise<pl.DenoFunctionModuleHandlerResult> {
+): Promise<ex.DenoFunctionModuleHandlerResult> {
   const srcPath = hc.pubCtlCtx.options.projectHome;
   switch (hc.step) {
     case publ.HookLifecycleStep.INSPECT:

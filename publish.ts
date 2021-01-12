@@ -10,13 +10,13 @@
 import {
   colors,
   docopt,
+  extend as ex,
   fs,
   govnSvcVersion as gsv,
   inspect as insp,
   path,
   shell,
 } from "./deps.ts";
-import * as pl from "./plugins.ts";
 
 export function determineVersion(importMetaURL: string): Promise<string> {
   return gsv.determineVersionFromRepoTag(
@@ -97,7 +97,7 @@ export enum HookLifecycleStep {
 
 export interface HookContext<T extends PublishCommandHandlerContext>
   extends
-    pl.PluginContext<PublishCommandHandlerContext>,
+    ex.PluginContext<PublishCommandHandlerContext>,
     insp.InspectionContext {
   readonly pubCtlCtx: T;
   readonly step: HookLifecycleStep;
@@ -111,7 +111,7 @@ export interface HookContext<T extends PublishCommandHandlerContext>
 export function isHookContext<T extends PublishCommandHandlerContext>(
   o: unknown,
 ): o is HookContext<T> {
-  if (pl.isPluginContext(o)) {
+  if (ex.isPluginContext(o)) {
     return "step" in o && "pubCtlCtx" in o;
   }
   return false;
@@ -120,13 +120,13 @@ export function isHookContext<T extends PublishCommandHandlerContext>(
 // deno-lint-ignore require-await
 export async function defaultPubCtlHook<
   T extends PublishCommandHandlerContext,
->(hc: HookContext<T>): Promise<pl.DenoFunctionModuleHandlerResult> {
+>(hc: HookContext<T>): Promise<ex.DenoFunctionModuleHandlerResult> {
   return defaultPubCtlHookSync(hc);
 }
 
 export function defaultPubCtlHookSync<
   T extends PublishCommandHandlerContext,
->(hc: HookContext<T>): pl.DenoFunctionModuleHandlerResult {
+>(hc: HookContext<T>): ex.DenoFunctionModuleHandlerResult {
   switch (hc.step) {
     case HookLifecycleStep.INSTALL:
     case HookLifecycleStep.DOCTOR:
@@ -155,8 +155,8 @@ export function defaultPubCtlHookResultEnhancer<
   T extends PublishCommandHandlerContext,
 >(
   hc: HookContext<T>,
-  dfmhResult?: pl.DenoFunctionModuleHandlerResult,
-): pl.DenoFunctionModuleHandlerResult {
+  dfmhResult?: ex.DenoFunctionModuleHandlerResult,
+): ex.DenoFunctionModuleHandlerResult {
   if (!dfmhResult) return {};
   return dfmhResult;
 }
@@ -217,17 +217,17 @@ export class PublishCommandHandlerOptions {
 
 export class PublishCommandHandlerPluginsManager<
   T extends PublishCommandHandlerContext,
-> implements pl.FileSystemPluginsSupplier {
-  readonly plugins: pl.Plugin[] = [];
-  readonly invalidPlugins: pl.InvalidPluginRegistration[] = [];
-  readonly localFsSources: pl.FileSystemGlobs;
+> implements ex.fs.FileSystemPluginsSupplier {
+  readonly plugins: ex.Plugin[] = [];
+  readonly invalidPlugins: ex.InvalidPluginRegistration[] = [];
+  readonly localFsSources: ex.fs.FileSystemGlobs;
 
   constructor(readonly options: PublishCommandHandlerOptions) {
     this.localFsSources = options.hooksGlobs;
   }
 
   async init(): Promise<void> {
-    await pl.discoverFileSystemPlugins({
+    await ex.fs.discoverFileSystemPlugins({
       discoveryPath: this.options.projectHome,
       globs: this.localFsSources,
       onValidPlugin: (vpr) => {
@@ -238,7 +238,7 @@ export class PublishCommandHandlerPluginsManager<
       },
       shellFileRegistryOptions: {
         shellCmdEnhancer: (
-          pc: pl.PluginContext<T>,
+          pc: ex.PluginContext<T>,
           suggestedCmd: string[],
         ): string[] => {
           if (!isHookContext(pc)) throw new Error("pc must be HookContext");
@@ -259,10 +259,10 @@ export class PublishCommandHandlerPluginsManager<
           return shell.cliVerboseShellOutputOptions;
         },
         envVarsSupplier: (
-          pc: pl.PluginContext<T>,
+          pc: ex.PluginContext<T>,
         ): Record<string, string> => {
           if (!isHookContext(pc)) throw new Error("pc must be HookContext");
-          if (!pl.isDiscoverFileSystemPluginSource(pc.plugin.source)) {
+          if (!ex.fs.isDiscoverFileSystemPluginSource(pc.plugin.source)) {
             throw new Error(
               "pc.plugin.source must be DiscoverFileSystemPluginSource",
             );
@@ -302,11 +302,11 @@ export class PublishCommandHandlerPluginsManager<
         },
       },
       typeScriptFileRegistryOptions: {
-        validateModule: pl.registerDenoFunctionModule,
+        validateModule: ex.registerDenoFunctionModule,
       },
     });
 
-    const registration = pl.registerDenoFunctionModule({
+    const registration = ex.registerDenoFunctionModule({
       module: await import("./plugins/inspect-project-common.ts"),
       source: {
         systemID: "./plugins/inspect-project-common.ts",
@@ -314,13 +314,13 @@ export class PublishCommandHandlerPluginsManager<
       },
       nature: { identity: "deno-module-function" },
     });
-    if (pl.isValidPluginRegistration(registration)) {
+    if (ex.isValidPluginRegistration(registration)) {
       this.plugins.push(registration.plugin);
     }
   }
 }
 
-export class PublishCommandHandlerContext implements pl.PluginExecutive {
+export class PublishCommandHandlerContext implements ex.PluginExecutive {
   constructor(
     readonly options: PublishCommandHandlerOptions,
     readonly pluginsMgr: PublishCommandHandlerPluginsManager<
@@ -352,11 +352,17 @@ export class PublishCommandHandlerContext implements pl.PluginExecutive {
         plugin: hook,
         pubCtlCtx: this,
         step: HookLifecycleStep.DOCTOR,
+        onActivity: (a: ex.PluginActivity): ex.PluginActivity => {
+          if (this.options.isVerbose) {
+            console.log(a.message);
+          }
+          return a;
+        },
       };
       const hookCtx = this.options.chsOptions.enhanceHookContext
         ? this.options.chsOptions.enhanceHookContext(suggestedHookCtx)
         : suggestedHookCtx;
-      if (pl.isShellExePlugin<PublishCommandHandlerContext>(hook)) {
+      if (ex.isShellExePlugin<PublishCommandHandlerContext>(hook)) {
         if (hook.envVars) {
           console.log(
             colors.yellow(hook.source.friendlyName),
@@ -373,7 +379,7 @@ export class PublishCommandHandlerContext implements pl.PluginExecutive {
         console.log(colors.dim(hook.shellCmd(hookCtx).join(" ")));
         continue;
       }
-      if (pl.isDenoFunctionModulePlugin(hook)) {
+      if (ex.isDenoFunctionModulePlugin(hook)) {
         console.log(
           colors.yellow(hook.source.friendlyName),
           colors.green(hook.nature.identity),
@@ -408,6 +414,12 @@ export class PublishCommandHandlerContext implements pl.PluginExecutive {
         plugin: hook,
         pubCtlCtx: this,
         step,
+        onActivity: (a: ex.PluginActivity): ex.PluginActivity => {
+          if (this.options.isVerbose) {
+            console.log(a.message);
+          }
+          return a;
+        },
       };
       const hookCtx = this.options.chsOptions.enhanceHookContext
         ? this.options.chsOptions.enhanceHookContext(suggestedHookCtx)
@@ -416,7 +428,7 @@ export class PublishCommandHandlerContext implements pl.PluginExecutive {
         colors.yellow(hook.source.friendlyName),
         colors.dim(`[execute(${step})]`),
       );
-      if (pl.isActionPlugin<PublishCommandHandlerContext>(hook)) {
+      if (ex.isActionPlugin<PublishCommandHandlerContext>(hook)) {
         await hook.execute(hookCtx);
         continue;
       } else {
@@ -461,7 +473,7 @@ export class PublishCommandHandlerContext implements pl.PluginExecutive {
    */
   async update() {
     const denoModules = this.pluginsMgr.plugins.filter((p) => {
-      return pl.isDenoModulePlugin(p) ? true : false;
+      return ex.isDenoModulePlugin(p) ? true : false;
     }).map((p) => p.source.systemID);
     const updatePkgs = this.reportShellCmd(
       `udd pubctl.ts ${denoModules.join(" ")}`,
