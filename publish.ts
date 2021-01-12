@@ -473,7 +473,10 @@ export class PublishCommandHandlerContext implements ex.PluginExecutive {
    */
   async update() {
     const denoModules = this.pluginsMgr.plugins.filter((p) => {
-      return ex.isDenoModulePlugin(p) ? true : false;
+      return ex.isDenoModulePlugin(p) &&
+          ex.fs.isFileSystemPluginSource(p.source)
+        ? true
+        : false;
     }).map((p) => p.source.systemID);
     const updatePkgs = this.reportShellCmd(
       `udd pubctl.ts ${denoModules.join(" ")}`,
