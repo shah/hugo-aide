@@ -28,8 +28,8 @@ export async function inspectProjectAssetFileNames(
 export async function pubCtlHook(
   hc: publ.HookContext<publ.PublishCommandHandlerContext>,
 ): Promise<ex.DenoFunctionModuleHandlerResult> {
-  const srcPath = hc.pubCtlCtx.options.projectHome;
-  switch (hc.step) {
+  const srcPath = hc.container.options.projectHome;
+  switch (hc.command.proxyCmd) {
     case publ.HookLifecycleStep.INSPECT:
       if (hc.onInspectionDiags) {
         hc.onInspectionDiags(
@@ -52,7 +52,7 @@ export async function pubCtlHook(
       console.log(
         `Will inspect ${
           colors.yellow(
-            path.relative(hc.pubCtlCtx.options.projectHome, srcPath) ||
+            path.relative(hc.container.options.projectHome, srcPath) ||
               "current directory",
           )
         } project assets for common issues`,

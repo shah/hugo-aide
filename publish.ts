@@ -42,9 +42,6 @@ export interface CommandHandlerSpecOptions<
   ) => O;
   readonly prepareCmdHandlerContext?: (
     options: O,
-    pluginsMgr: PublishCommandHandlerPluginsManager<
-      PublishCommandHandlerContext
-    >,
   ) => C;
 }
 
@@ -97,10 +94,8 @@ export enum HookLifecycleStep {
 
 export interface HookContext<T extends PublishCommandHandlerContext>
   extends
-    ex.PluginContext<PublishCommandHandlerContext>,
+    ex.CommandProxyPluginContext<PublishCommandHandlerContext>,
     insp.InspectionContext {
-  readonly pubCtlCtx: T;
-  readonly step: HookLifecycleStep;
   readonly onInspectionDiags?: (
     // deno-lint-ignore no-explicit-any
     id: insp.InspectionDiagnostics<any, Error>,
@@ -111,10 +106,7 @@ export interface HookContext<T extends PublishCommandHandlerContext>
 export function isHookContext<T extends PublishCommandHandlerContext>(
   o: unknown,
 ): o is HookContext<T> {
-  if (ex.isPluginContext(o)) {
-    return "step" in o && "pubCtlCtx" in o;
-  }
-  return false;
+  return ex.isCommandProxyPluginContext(o);
 }
 
 // deno-lint-ignore require-await
@@ -127,7 +119,7 @@ export async function defaultPubCtlHook<
 export function defaultPubCtlHookSync<
   T extends PublishCommandHandlerContext,
 >(hc: HookContext<T>): ex.DenoFunctionModuleHandlerResult {
-  switch (hc.step) {
+  switch (hc.command.proxyCmd) {
     case HookLifecycleStep.INSTALL:
     case HookLifecycleStep.DOCTOR:
       console.log("No external dependencies");
@@ -139,9 +131,12 @@ export function defaultPubCtlHookSync<
     case HookLifecycleStep.INSPECT:
     case HookLifecycleStep.CLEAN:
     case HookLifecycleStep.UPDATE:
-      console.log(`${hc.step} not implemented`);
+      console.log(`${hc.command.proxyCmd} not implemented`);
       return defaultPubCtlHookResultEnhancer(hc);
   }
+
+  console.log(`${hc.command.proxyCmd} unknown command`);
+  return defaultPubCtlHookResultEnhancer(hc);
 }
 
 /**
@@ -217,116 +212,91 @@ export class PublishCommandHandlerOptions {
 
 export class PublishCommandHandlerPluginsManager<
   T extends PublishCommandHandlerContext,
-> implements ex.fs.FileSystemPluginsSupplier {
-  readonly plugins: ex.Plugin[] = [];
-  readonly invalidPlugins: ex.InvalidPluginRegistration[] = [];
-  readonly localFsSources: ex.fs.FileSystemGlobs;
-
-  constructor(readonly options: PublishCommandHandlerOptions) {
-    this.localFsSources = options.hooksGlobs;
+> extends ex.fs.CommandProxyFileSystemPluginsManager<T> {
+  constructor(
+    pchc: T,
+    readonly pchOptions: PublishCommandHandlerOptions,
+  ) {
+    super(
+      pchc,
+      {},
+      {
+        discoveryPath: pchOptions.projectHome,
+        localFsSources: pchOptions.hooksGlobs,
+        shellCmdEnvVarsDefaultPrefix: "PUBCTLHOOK_",
+      },
+    );
   }
 
-  async init(): Promise<void> {
-    await ex.fs.discoverFileSystemPlugins({
-      discoveryPath: this.options.projectHome,
-      globs: this.localFsSources,
-      onValidPlugin: (vpr) => {
-        this.plugins.push(vpr.plugin);
-      },
-      onInvalidPlugin: (ipr) => {
-        this.invalidPlugins.push(ipr);
-      },
-      shellFileRegistryOptions: {
-        shellCmdEnhancer: (
-          pc: ex.PluginContext<T>,
-          suggestedCmd: string[],
-        ): string[] => {
-          if (!isHookContext(pc)) throw new Error("pc must be HookContext");
-          const cmd = [...suggestedCmd];
-          cmd.push(pc.step);
-          if (this.options.targets.length > 0) {
-            cmd.push(...this.options.targets);
-          }
-          if (this.options.isVerbose) cmd.push("--verbose");
-          if (this.options.isDryRun) cmd.push("--dry-run");
-          for (const arg of Object.entries(this.options.arguments)) {
-            const [name, value] = arg;
-            cmd.push(name, value);
-          }
-          return cmd;
-        },
-        runShellCmdOpts: (): shell.RunShellCommandOptions => {
-          return shell.cliVerboseShellOutputOptions;
-        },
-        envVarsSupplier: (
-          pc: ex.PluginContext<T>,
-        ): Record<string, string> => {
-          if (!isHookContext(pc)) throw new Error("pc must be HookContext");
-          if (!ex.fs.isDiscoverFileSystemPluginSource(pc.plugin.source)) {
-            throw new Error(
-              "pc.plugin.source must be DiscoverFileSystemPluginSource",
-            );
-          }
-          const hookHome = path.dirname(pc.plugin.source.absPathAndFileName);
-          const result: Record<string, string> = {
-            PUBCTLHOOK_LIFECYLE_STEP: pc.step,
-            PUBCTLHOOK_VERBOSE: this.options.isVerbose ? "1" : "0",
-            PUBCTLHOOK_DRY_RUN: this.options.isDryRun ? "1" : "0",
-            PUBCTLHOOK_HOME_ABS: hookHome,
-            PUBCTLHOOK_HOME_REL: path.relative(
-              this.options.projectHome,
-              hookHome,
-            ),
-            PUBCTLHOOK_NAME: path.basename(pc.plugin.source.absPathAndFileName),
-            PUBCTLHOOK_PROJECT_HOME_ABS: this.options.projectHome,
-            PUBCTLHOOK_PROJECT_HOME_REL: path.relative(
-              hookHome,
-              this.options.projectHome,
-            ),
-            PUBCTLHOOK_CLI_OPTIONS_JSON: JSON.stringify(
-              this.options.cliOptions,
-            ),
-          };
-          if (this.options.schedule) {
-            result.PUBCTLHOOK_SCHEDULE = this.options.schedule;
-          }
-          if (this.options.targets.length > 0) {
-            result.PUBCTLHOOK_TARGETS = this.options.targets.join(" ");
-          }
-          if (Object.keys(this.options.arguments).length > 0) {
-            result.PUBCTLHOOK_ARGS_JSON = JSON.stringify(
-              this.options.arguments,
-            );
-          }
-          return result;
-        },
-      },
-      typeScriptFileRegistryOptions: {
-        validateModule: ex.registerDenoFunctionModule,
-      },
-    });
-
-    const registration = ex.registerDenoFunctionModule({
-      module: await import("./plugins/inspect-project-common.ts"),
-      source: {
-        systemID: "./plugins/inspect-project-common.ts",
-        friendlyName: "stdlib:plugins/inspect-project-common.ts",
-      },
-      nature: { identity: "deno-module-function" },
-    });
-    if (ex.isValidPluginRegistration(registration)) {
-      this.plugins.push(registration.plugin);
+  enhanceShellCmd(
+    pc: ex.CommandProxyPluginContext<T>,
+    suggestedCmd: string[],
+  ): string[] {
+    if (!isHookContext(pc)) throw new Error("pc must be HookContext");
+    const cmd = [...suggestedCmd];
+    cmd.push(pc.command.proxyCmd);
+    if (this.pchOptions.targets.length > 0) {
+      cmd.push(...this.pchOptions.targets);
     }
+    if (this.pchOptions.isVerbose) cmd.push("--verbose");
+    if (this.pchOptions.isDryRun) cmd.push("--dry-run");
+    for (
+      const arg of Object.entries(pc.arguments || this.pchOptions.arguments)
+    ) {
+      const [name, value] = arg;
+      cmd.push(name, value);
+    }
+    return cmd;
+  }
+
+  prepareShellCmdEnvVars(
+    pc: ex.CommandProxyPluginContext<T>,
+    envVarsPrefix: string,
+  ): Record<string, string> {
+    const result = super.prepareShellCmdEnvVars(pc, envVarsPrefix);
+    if (!isHookContext(pc)) throw new Error("pc must be HookContext");
+    if (!ex.fs.isDiscoverFileSystemPluginSource(pc.plugin.source)) {
+      throw new Error(
+        "pc.plugin.source must be DiscoverFileSystemPluginSource",
+      );
+    }
+    const hookHome = path.dirname(pc.plugin.source.absPathAndFileName);
+    result[`${envVarsPrefix}VERBOSE`] = this.pchOptions.isVerbose ? "1" : "0";
+    result[`${envVarsPrefix}DRY_RUN`] = this.pchOptions.isDryRun ? "1" : "0";
+    result[`${envVarsPrefix}PROJECT_HOME_ABS`] = this.pchOptions.projectHome;
+    result[`${envVarsPrefix}PROJECT_HOME_REL`] = path.relative(
+      hookHome,
+      this.pchOptions.projectHome,
+    );
+    result[`${envVarsPrefix}OPTIONS_JSON`] = JSON.stringify(
+      this.pchOptions.cliOptions,
+    );
+    if (this.pchOptions.schedule) {
+      result[`${envVarsPrefix}SCHEDULE`] = this.pchOptions.schedule;
+    }
+    if (this.pchOptions.targets.length > 0) {
+      result[`${envVarsPrefix}TARGETS`] = this.pchOptions.targets.join(" ");
+    }
+    const cmdArgs = pc.arguments || this.pchOptions.arguments;
+    if (Object.keys(cmdArgs).length > 0) {
+      result[`${envVarsPrefix}ARGS_JSON`] = JSON.stringify(cmdArgs);
+    }
+    return result;
   }
 }
 
 export class PublishCommandHandlerContext implements ex.PluginExecutive {
-  constructor(
-    readonly options: PublishCommandHandlerOptions,
-    readonly pluginsMgr: PublishCommandHandlerPluginsManager<
+  readonly pluginsMgr: PublishCommandHandlerPluginsManager<
+    PublishCommandHandlerContext
+  >;
+  constructor(readonly options: PublishCommandHandlerOptions) {
+    this.pluginsMgr = new PublishCommandHandlerPluginsManager<
       PublishCommandHandlerContext
-    >,
-  ) {
+    >(this, options);
+  }
+
+  async init(): Promise<void> {
+    await this.pluginsMgr.init();
   }
 
   reportShellCmd(cmd: string): string {
@@ -350,8 +320,7 @@ export class PublishCommandHandlerContext implements ex.PluginExecutive {
       const suggestedHookCtx: HookContext<PublishCommandHandlerContext> = {
         container: this,
         plugin: hook,
-        pubCtlCtx: this,
-        step: HookLifecycleStep.DOCTOR,
+        command: { proxyCmd: HookLifecycleStep.DOCTOR },
         onActivity: (a: ex.PluginActivity): ex.PluginActivity => {
           if (this.options.isVerbose) {
             console.log(a.message);
@@ -407,46 +376,20 @@ export class PublishCommandHandlerContext implements ex.PluginExecutive {
     }
   }
 
-  async executeHooks(step: HookLifecycleStep): Promise<void> {
-    for (const hook of this.pluginsMgr.plugins) {
-      const suggestedHookCtx: HookContext<PublishCommandHandlerContext> = {
-        container: this,
-        plugin: hook,
-        pubCtlCtx: this,
-        step,
-        onActivity: (a: ex.PluginActivity): ex.PluginActivity => {
-          if (this.options.isVerbose) {
-            console.log(a.message);
-          }
-          return a;
-        },
-      };
-      const hookCtx = this.options.chsOptions.enhanceHookContext
-        ? this.options.chsOptions.enhanceHookContext(suggestedHookCtx)
-        : suggestedHookCtx;
-      console.log(
-        colors.yellow(hook.source.friendlyName),
-        colors.dim(`[execute(${step})]`),
-      );
-      if (ex.isActionPlugin<PublishCommandHandlerContext>(hook)) {
-        await hook.execute(hookCtx);
-        continue;
-      } else {
-        console.log(colors.dim(`[executeHooks(${step})] not an Action plugin`));
-      }
-    }
+  async executeHooks(command: ex.ProxyableCommand): Promise<void> {
+    await this.pluginsMgr.execute(command);
   }
 
   async generateAssets() {
-    return await this.executeHooks(HookLifecycleStep.GENERATE);
+    return await this.executeHooks({ proxyCmd: HookLifecycleStep.GENERATE });
   }
 
   async build() {
-    return await this.executeHooks(HookLifecycleStep.BUILD);
+    return await this.executeHooks({ proxyCmd: HookLifecycleStep.BUILD });
   }
 
   async clean() {
-    await this.executeHooks(HookLifecycleStep.CLEAN);
+    await this.executeHooks({ proxyCmd: HookLifecycleStep.CLEAN });
     const hugoModClean = this.reportShellCmd(`hugox mod clean --all`);
     await shell.runShellCommand(hugoModClean, {
       ...(this.options.isVerbose
@@ -487,7 +430,7 @@ export class PublishCommandHandlerContext implements ex.PluginExecutive {
         : shell.quietShellOutputOptions),
       dryRun: this.options.isDryRun,
     });
-    this.executeHooks(HookLifecycleStep.UPDATE);
+    this.executeHooks({ proxyCmd: HookLifecycleStep.UPDATE });
   }
 }
 
@@ -496,7 +439,7 @@ export async function installHandler(
 ): Promise<true | void> {
   const { "install": install } = ctx.options.cliOptions;
   if (install) {
-    await ctx.executeHooks(HookLifecycleStep.INSTALL);
+    await ctx.executeHooks({ proxyCmd: HookLifecycleStep.INSTALL });
     return true;
   }
 }
@@ -517,7 +460,7 @@ export async function inspectHandler(
 ): Promise<true | void> {
   const { "inspect": inspect } = ctx.options.cliOptions;
   if (inspect) {
-    await ctx.executeHooks(HookLifecycleStep.INSPECT);
+    await ctx.executeHooks({ proxyCmd: HookLifecycleStep.INSPECT });
     return true;
   }
 }
@@ -527,7 +470,7 @@ export async function describeHandler(
 ): Promise<true | void> {
   const { "describe": describe } = ctx.options.cliOptions;
   if (describe) {
-    await ctx.executeHooks(HookLifecycleStep.DESCRIBE);
+    await ctx.executeHooks({ proxyCmd: HookLifecycleStep.DESCRIBE });
     return true;
   }
 }
@@ -602,7 +545,7 @@ export async function doctorHandler(
 ): Promise<true | void> {
   const { "doctor": doctor } = ctx.options.cliOptions;
   if (doctor) {
-    await ctx.executeHooks(HookLifecycleStep.DOCTOR);
+    await ctx.executeHooks({ proxyCmd: HookLifecycleStep.DOCTOR });
     return true;
   }
 }
@@ -661,13 +604,10 @@ export async function CLI(
     const pchOptions = prepareOptions
       ? prepareOptions(chsOptions, cliOptions)
       : new PublishCommandHandlerOptions(chsOptions, cliOptions);
-    const pluginsMgr = new PublishCommandHandlerPluginsManager<
-      PublishCommandHandlerContext
-    >(pchOptions);
-    await pluginsMgr.init();
     const context = prepareContext
-      ? prepareContext(pchOptions, pluginsMgr)
-      : new PublishCommandHandlerContext(pchOptions, pluginsMgr);
+      ? prepareContext(pchOptions)
+      : new PublishCommandHandlerContext(pchOptions);
+    await context.init();
     let handled: true | void;
     if (customHandlers) {
       for (const handler of customHandlers) {
