@@ -48,7 +48,7 @@ and then some more text.
 <span style="abc:xyz">span HTML with key/value param</span>
 {{<todo assign="shah">}}an assignment{{</todo>}}`;
 
-Deno.test(`Test simple Markdown content generator`, () => {
+Deno.test(`simple Markdown content generator`, () => {
   const exampleUrl =
     "https://github.com/skulptur/markdown-fns/tree/master/example";
   const fruits = ["Apples", "Oranges", "Bananas"];

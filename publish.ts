@@ -17,6 +17,7 @@ import {
   path,
   shell,
 } from "./deps.ts";
+import * as config from "./hugo-config.ts";
 
 export function determineVersion(importMetaURL: string): Promise<string> {
   return gsv.determineVersionFromRepoTag(
@@ -36,13 +37,14 @@ export interface CommandHandlerSpecOptions<
   readonly docoptSpec?: (chsOptions: CommandHandlerSpecOptions) => string;
   readonly customHandlers?: PublishCommandHandler<C>[];
   readonly enhanceHookContext?: (suggested: HookContext<C>) => HookContext<C>;
-  readonly prepareOptions?: (
+  readonly prepareCmdHandlerOptions?: (
     chsOptions: CommandHandlerSpecOptions,
     cliOptions: docopt.DocOptions,
   ) => O;
   readonly prepareCmdHandlerContext?: (
     options: O,
   ) => C;
+  readonly prepareShellCmd?: (cmd: string) => string;
 }
 
 export function defaultDocoptSpec(
@@ -52,10 +54,12 @@ export function defaultDocoptSpec(
 Publication Controller ${version}.
 
 Usage:
+  pubctl init (--site=<site-id> | --module=<module-id>...) [--port=<port>] [--exclude-taxn] [--dest=<dest>] [--graph] [--verbose] [--dry-run]
+  pubctl configure (--site=<site-id> | --module=<module-id>...) [--port=<port>] [--exclude-taxn] [--dest=<dest>] [--verbose] [--dry-run]
   pubctl install [<target>]... [--project=<path>] [--hooks=<glob>]... [--dry-run] [--verbose] [--arg=<name>]... [--argv=<value>]...
   pubctl validate hooks [<target>]... [--project=<path>] [--hooks=<glob>]... [--dry-run] [--verbose] [--arg=<name>]... [--argv=<value>]...
   pubctl describe [<target>]... [--project=<path>] [--hooks=<glob>]... [--arg=<name>]... [--argv=<value>]...
-  pubctl inspect [<target>]... [--project=<path>] [--hooks=<glob>]... [--arg=<name>]... [--argv=<value>]...
+  pubctl inspect (publications | site-identities | [<target>]...) [--project=<path>] [--hooks=<glob>]... [--arg=<name>]... [--argv=<value>]...
   pubctl build [<target>]... [--schedule=<cronSpec>] [--project=<path>] [--hooks=<glob>]... [--dry-run] [--verbose] [--arg=<name>]... [--argv=<value>]...
   pubctl generate [<target>]... [--schedule=<cronSpec>] [--project=<path>] [--hooks=<glob>]... [--dry-run] [--verbose] [--arg=<name>]... [--argv=<value>]...
   pubctl clean [<target>]... [--project=<path>] [--hooks=<glob>]... [--dry-run] [--verbose] [--arg=<name>]... [--argv=<value>]...
@@ -66,6 +70,8 @@ Usage:
 
 Options:
   <target>               One or more identifiers that the hook will understand
+  --site-id=PUBLICATION  A Hugo Configuration supplier name
+  --module=MODULE        One or more Hugo module identifiers that should be included in the init or configure process
   --schedule=CRONSPEC    Cron spec for schedule [default: * * * * *]
   --project=PATH         The project's home directory, defaults to current directory
   --hooks=GLOB           Glob of hooks which will be found and executed [default: **/*/*.hook-pubctl.*]
@@ -82,12 +88,13 @@ export interface PublishCommandHandler<T extends PublishCommandHandlerContext> {
 }
 
 export enum HookLifecycleStep {
-  DESCRIBE = "describe",
   INSTALL = "install",
+  UNINSTALL = "uninstall",
   DOCTOR = "doctor",
-  BUILD = "build",
+  DESCRIBE = "describe",
   INSPECT = "inspect",
   GENERATE = "generate",
+  BUILD = "build",
   CLEAN = "clean",
   UPDATE = "update",
 }
@@ -156,6 +163,17 @@ export function defaultPubCtlHookResultEnhancer<
   return dfmhResult;
 }
 
+export type PublicationIdentity = string;
+
+export interface Publication {
+  readonly identity: PublicationIdentity;
+  readonly hugoModuleName: string;
+  readonly isDefault: boolean;
+  readonly configuration: (
+    ctx: PublishCommandHandlerContext,
+  ) => config.HugoConfigurationSupplier;
+}
+
 export class PublishCommandHandlerOptions {
   readonly projectHome: string;
   readonly hooksGlobs: string[];
@@ -219,7 +237,7 @@ export class PublishCommandHandlerPluginsManager<
   ) {
     super(
       pchc,
-      {},
+      {}, // TODO add allowable commands?
       {
         discoveryPath: pchOptions.projectHome,
         localFsSources: pchOptions.hooksGlobs,
@@ -286,6 +304,8 @@ export class PublishCommandHandlerPluginsManager<
 }
 
 export class PublishCommandHandlerContext implements ex.PluginExecutive {
+  readonly publications: Record<string, Publication> = {};
+  readonly contentModules: config.ContentModule[] = [];
   readonly pluginsMgr: PublishCommandHandlerPluginsManager<
     PublishCommandHandlerContext
   >;
@@ -295,8 +315,54 @@ export class PublishCommandHandlerContext implements ex.PluginExecutive {
     >(this, options);
   }
 
-  async init(): Promise<void> {
+  async initContext(): Promise<void> {
     await this.pluginsMgr.init();
+  }
+
+  publication(
+    publ: PublicationIdentity,
+  ): Publication | undefined {
+    return this.publications[publ];
+  }
+
+  async hugoModInit(
+    publ: Publication,
+    destPath: string,
+    graph?: boolean,
+  ): Promise<boolean> {
+    this.clean();
+    const hugoModInit = this.reportShellCmd(
+      `hugo mod init ${publ.hugoModuleName} --verbose`,
+    );
+    await shell.runShellCommand(hugoModInit, {
+      ...(this.options?.isVerbose
+        ? shell.cliVerboseShellOutputOptions
+        : shell.quietShellOutputOptions),
+      dryRun: this.options?.isDryRun,
+    });
+    if (graph) {
+      const confFileName = this.configureHugo(publ, destPath);
+      const hugoModGraph = this.reportShellCmd(
+        `hugo mod graph --verbose --config ${confFileName} --log`,
+      );
+      await shell.runShellCommand(hugoModGraph, {
+        ...(this.options?.isVerbose
+          ? shell.cliVerboseShellOutputOptions
+          : shell.quietShellOutputOptions),
+        dryRun: this.options?.isDryRun,
+      });
+    }
+    return true;
+  }
+
+  configureHugo(publ: Publication, destPath: string): string | undefined {
+    const supplier = publ.configuration(this);
+    const fileName = config.persistConfiguration(
+      destPath,
+      supplier,
+      this.options?.isDryRun,
+    );
+    return fileName;
   }
 
   reportShellCmd(cmd: string): string {
@@ -380,12 +446,35 @@ export class PublishCommandHandlerContext implements ex.PluginExecutive {
     await this.pluginsMgr.execute(command);
   }
 
-  async generateAssets() {
+  async generate() {
     return await this.executeHooks({ proxyCmd: HookLifecycleStep.GENERATE });
   }
 
   async build() {
     return await this.executeHooks({ proxyCmd: HookLifecycleStep.BUILD });
+  }
+
+  async inspect() {
+    const {
+      "publications": publications, // modern, synonym for site-identities
+      "site-identities": siteIdentities, // legacy: TODO remove this
+    } = this.options.cliOptions;
+    if (siteIdentities || publications) {
+      this.inspectPublications();
+      return true;
+    }
+    await this.executeHooks({ proxyCmd: HookLifecycleStep.INSPECT });
+  }
+
+  inspectPublications(): void {
+    Object.values(this.publications).forEach((publ) => {
+      const hc = publ.configuration(this);
+      console.log(
+        `${colors.green(publ.identity)}: ${
+          colors.blue(hc.hugoConfigFileName || "<no name>")
+        }`,
+      );
+    });
   }
 
   async clean() {
@@ -434,6 +523,71 @@ export class PublishCommandHandlerContext implements ex.PluginExecutive {
   }
 }
 
+export async function hugoInitHandler(
+  ctx: PublishCommandHandlerContext,
+): Promise<true | void> {
+  const {
+    "init": init,
+    "--site": siteID,
+    "--dest": destPath,
+    "--graph": graph,
+  } = ctx.options.cliOptions;
+  console.log(init, siteID);
+  if (init && siteID) {
+    const identity = siteID.toString();
+    const publ = ctx.publication(identity);
+    if (publ) {
+      await ctx.hugoModInit(
+        publ,
+        destPath ? destPath.toString() : ctx.options.projectHome,
+        graph ? true : false,
+      );
+    } else {
+      console.error(
+        colors.red(
+          `unable to init publication ID '${
+            colors.yellow(identity)
+          }': no definition found`,
+        ),
+      );
+    }
+    return true;
+  }
+}
+
+// deno-lint-ignore require-await
+export async function hugoConfigureHandler(
+  ctx: PublishCommandHandlerContext,
+): Promise<true | void> {
+  const {
+    "configure": configure,
+    "--site": siteID,
+    "--dest": destPath,
+  } = ctx.options.cliOptions;
+  if (configure && siteID) {
+    const identity = siteID.toString();
+    const publ = ctx.publication(identity);
+    if (publ) {
+      const fileName = ctx.configureHugo(
+        publ,
+        (destPath ? destPath.toString() : undefined) || ctx.options.projectHome,
+      );
+      if (fileName && ctx.options.isVerbose) {
+        console.log(fileName);
+      }
+    } else {
+      console.error(
+        colors.red(
+          `unable to configure publication ID '${
+            colors.yellow(identity)
+          }': no definition found`,
+        ),
+      );
+    }
+    return true;
+  }
+}
+
 export async function installHandler(
   ctx: PublishCommandHandlerContext,
 ): Promise<true | void> {
@@ -460,7 +614,7 @@ export async function inspectHandler(
 ): Promise<true | void> {
   const { "inspect": inspect } = ctx.options.cliOptions;
   if (inspect) {
-    await ctx.executeHooks({ proxyCmd: HookLifecycleStep.INSPECT });
+    await ctx.inspect();
     return true;
   }
 }
@@ -475,47 +629,12 @@ export async function describeHandler(
   }
 }
 
-// TODO: merge into `inspect`
-// export async function lintHandler(
-//   ctx: PublishCommandHandlerContext,
-// ): Promise<true | void> {
-//   const { "lint": lint, "--cli-suggestions": cliSuggestions } =
-//     ctx.options.cliOptions;
-//   if (lint) {
-//     const results = ctx.lint(ctx.options.projectHome);
-//     if (cliSuggestions) {
-//       for (const fni of results.fileNameIssues) {
-//         for (const diag of fni.diagnostics) {
-//           if (diag.correctionLinuxCmd) {
-//             console.log(diag.correctionLinuxCmd);
-//           }
-//         }
-//       }
-//     } else {
-//       for (const fni of results.fileNameIssues) {
-//         const relPath = path.relative(ctx.options.projectHome, fni.file.path);
-//         console.log(`${colors.yellow(relPath)}:`);
-//         for (const diag of fni.diagnostics) {
-//           console.log(`    ${colors.red(diag.diagnostic)}`);
-//           if (diag.correctionLinuxCmd) {
-//             console.log(`    ${colors.green(diag.correctionLinuxCmd)}`);
-//           }
-//         }
-//       }
-//     }
-//     // TODO: this needs to be integrated into ctx.lint() such that each hook
-//     // can "contribute" lint results -- perhaps use github.com/shah/ts-inspect?
-//     ctx.executeHooks(HookLifecycleStep.LINT);
-//     return true;
-//   }
-// }
-
 export async function generateHandler(
   ctx: PublishCommandHandlerContext,
 ): Promise<true | void> {
   const { "generate": generate } = ctx.options.cliOptions;
   if (generate) {
-    await ctx.generateAssets();
+    await ctx.generate();
     return true;
   }
 }
@@ -576,6 +695,8 @@ export async function versionHandler(
 }
 
 export const commonHandlers = [
+  hugoInitHandler,
+  hugoConfigureHandler,
   describeHandler,
   installHandler,
   validateHooksHandler,
@@ -594,20 +715,23 @@ export async function CLI(
   const {
     docoptSpec,
     customHandlers,
-    prepareOptions,
-    prepareCmdHandlerContext: prepareContext,
+    prepareCmdHandlerOptions,
+    prepareCmdHandlerContext,
   } = chsOptions;
   try {
     const cliOptions = docopt.default(
       docoptSpec ? docoptSpec(chsOptions) : defaultDocoptSpec(chsOptions),
     );
-    const pchOptions = prepareOptions
-      ? prepareOptions(chsOptions, cliOptions)
-      : new PublishCommandHandlerOptions(chsOptions, cliOptions);
-    const context = prepareContext
-      ? prepareContext(pchOptions)
+    const pchOptions = prepareCmdHandlerOptions
+      ? prepareCmdHandlerOptions(chsOptions, cliOptions)
+      : new PublishCommandHandlerOptions(
+        chsOptions,
+        cliOptions,
+      );
+    const context = prepareCmdHandlerContext
+      ? prepareCmdHandlerContext(pchOptions)
       : new PublishCommandHandlerContext(pchOptions);
-    await context.init();
+    await context.initContext();
     let handled: true | void;
     if (customHandlers) {
       for (const handler of customHandlers) {

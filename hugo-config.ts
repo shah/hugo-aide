@@ -5,6 +5,13 @@ import {
   safety,
 } from "./deps.ts";
 
+export type ContentModuleIdentity = string;
+
+export interface ContentModule {
+  readonly identity: ContentModuleIdentity;
+  readonly isRequired?: boolean;
+}
+
 export type HugoConfigurationIdentity = string;
 
 export interface HugoConfigurationSupplier {
