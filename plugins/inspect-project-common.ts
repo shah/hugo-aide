@@ -5,7 +5,7 @@ import {
   inspectAsset as ipa,
   path,
 } from "../deps.ts";
-import * as publ from "../publish.ts";
+import * as publ from "../mod.ts";
 
 export const inspectionDiagsCategory = "project.assets.filenames";
 
@@ -26,9 +26,9 @@ export async function inspectProjectAssetFileNames(
 }
 
 export async function pubCtlHook(
-  hc: publ.HookContext<publ.PublishCommandHandlerContext>,
+  hc: publ.HookContext<publ.PublicationsController>,
 ): Promise<ex.DenoFunctionModuleHandlerResult> {
-  const srcPath = hc.container.options.projectHome;
+  const srcPath = hc.container.pco.projectHome;
   switch (hc.command.proxyCmd) {
     case publ.HookLifecycleStep.INSPECT:
       if (hc.onInspectionDiags) {
@@ -52,7 +52,7 @@ export async function pubCtlHook(
       console.log(
         `Will inspect ${
           colors.yellow(
-            path.relative(hc.container.options.projectHome, srcPath) ||
+            path.relative(hc.container.pco.projectHome, srcPath) ||
               "current directory",
           )
         } project assets for common issues`,

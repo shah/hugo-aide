@@ -17,7 +17,8 @@ import {
   path,
   shell,
 } from "./deps.ts";
-import * as config from "./hugo-config.ts";
+import * as p from "./publication.ts";
+import * as hugo from "./hugo-config.ts";
 
 export function determineVersion(importMetaURL: string): Promise<string> {
   return gsv.determineVersionFromRepoTag(
@@ -26,32 +27,16 @@ export function determineVersion(importMetaURL: string): Promise<string> {
   );
 }
 
-export interface CommandHandlerSpecOptions<
-  O extends PublishCommandHandlerOptions = PublishCommandHandlerOptions,
-  C extends PublishCommandHandlerContext = PublishCommandHandlerContext,
-> {
+export interface CommandHandlerCaller {
   readonly calledFromMetaURL: string;
   readonly calledFromMain: boolean;
   readonly version: string;
   readonly projectHome?: string;
-  readonly docoptSpec?: (chsOptions: CommandHandlerSpecOptions) => string;
-  readonly customHandlers?: PublishCommandHandler<C>[];
-  readonly enhanceHookContext?: (suggested: HookContext<C>) => HookContext<C>;
-  readonly prepareCmdHandlerOptions?: (
-    chsOptions: CommandHandlerSpecOptions,
-    cliOptions: docopt.DocOptions,
-  ) => O;
-  readonly prepareCmdHandlerContext?: (
-    options: O,
-  ) => C;
-  readonly prepareShellCmd?: (cmd: string) => string;
 }
 
-export function defaultDocoptSpec(
-  { version: version }: CommandHandlerSpecOptions,
-): string {
+export function defaultDocoptSpec(caller: CommandHandlerCaller): string {
   return `
-Publication Controller ${version}.
+Publication Controller ${caller.version}.
 
 Usage:
   pubctl init (--site=<site-id> | --module=<module-id>...) [--port=<port>] [--exclude-taxn] [--dest=<dest>] [--graph] [--verbose] [--dry-run]
@@ -83,8 +68,10 @@ Options:
 `;
 }
 
-export interface PublishCommandHandler<T extends PublishCommandHandlerContext> {
-  (ctx: T): Promise<true | void>;
+export interface PublicationsControllerCommandHandler<
+  PC extends PublicationsController,
+> {
+  (ctx: PC): Promise<true | void>;
 }
 
 export enum HookLifecycleStep {
@@ -99,10 +86,8 @@ export enum HookLifecycleStep {
   UPDATE = "update",
 }
 
-export interface HookContext<T extends PublishCommandHandlerContext>
-  extends
-    ex.CommandProxyPluginContext<PublishCommandHandlerContext>,
-    insp.InspectionContext {
+export interface HookContext<PC extends PublicationsController>
+  extends ex.CommandProxyPluginContext<PC>, insp.InspectionContext {
   readonly onInspectionDiags?: (
     // deno-lint-ignore no-explicit-any
     id: insp.InspectionDiagnostics<any, Error>,
@@ -110,22 +95,22 @@ export interface HookContext<T extends PublishCommandHandlerContext>
   ) => void;
 }
 
-export function isHookContext<T extends PublishCommandHandlerContext>(
+export function isHookContext<PC extends PublicationsController>(
   o: unknown,
-): o is HookContext<T> {
+): o is HookContext<PC> {
   return ex.isCommandProxyPluginContext(o);
 }
 
 // deno-lint-ignore require-await
 export async function defaultPubCtlHook<
-  T extends PublishCommandHandlerContext,
->(hc: HookContext<T>): Promise<ex.DenoFunctionModuleHandlerResult> {
+  PC extends PublicationsController,
+>(hc: HookContext<PC>): Promise<ex.DenoFunctionModuleHandlerResult> {
   return defaultPubCtlHookSync(hc);
 }
 
 export function defaultPubCtlHookSync<
-  T extends PublishCommandHandlerContext,
->(hc: HookContext<T>): ex.DenoFunctionModuleHandlerResult {
+  PC extends PublicationsController,
+>(hc: HookContext<PC>): ex.DenoFunctionModuleHandlerResult {
   switch (hc.command.proxyCmd) {
     case HookLifecycleStep.INSTALL:
     case HookLifecycleStep.DOCTOR:
@@ -154,112 +139,114 @@ export function defaultPubCtlHookSync<
  * @param dfmhResult 
  */
 export function defaultPubCtlHookResultEnhancer<
-  T extends PublishCommandHandlerContext,
+  PC extends PublicationsController,
 >(
-  hc: HookContext<T>,
+  hc: HookContext<PC>,
   dfmhResult?: ex.DenoFunctionModuleHandlerResult,
 ): ex.DenoFunctionModuleHandlerResult {
   if (!dfmhResult) return {};
   return dfmhResult;
 }
 
-export type PublicationIdentity = string;
-
-export interface Publication {
-  readonly identity: PublicationIdentity;
-  readonly hugoModuleName: string;
-  readonly isDefault: boolean;
-  readonly configuration: (
-    ctx: PublishCommandHandlerContext,
-  ) => config.HugoConfigurationSupplier;
+export interface CliArgsSupplier {
+  readonly cliArgs: docopt.DocOptions;
 }
 
-export class PublishCommandHandlerOptions {
+export interface PublicationsControllerOptions {
   readonly projectHome: string;
   readonly hooksGlobs: string[];
   readonly targets: string[];
-  readonly arguments: Record<string, string> = {};
+  readonly arguments: Record<string, string>;
   readonly schedule?: string;
   readonly isVerbose: boolean;
   readonly isDryRun: boolean;
-
-  constructor(
-    readonly chsOptions: CommandHandlerSpecOptions,
-    readonly cliOptions: docopt.DocOptions,
-  ) {
-    const {
-      "--project": projectHome,
-      "--hooks": hooksGlob,
-      "--verbose": verbose,
-      "--dry-run": dryRun,
-      "--schedule": schedule,
-      "<target>": targets,
-      "--arg": argNames,
-      "--argv": argsValues,
-    } = this.cliOptions;
-    this.projectHome = projectHome
-      ? projectHome as string
-      : (chsOptions.projectHome || Deno.cwd());
-    this.hooksGlobs = hooksGlob as string[];
-    this.targets = targets as string[];
-    this.schedule = schedule ? schedule.toString() : undefined;
-    this.isDryRun = dryRun ? true : false;
-    this.isVerbose = this.isDryRun || (verbose ? true : false);
-
-    if (argNames) {
-      const an = argNames as string[];
-      const av = argsValues as string[];
-
-      if (an.length == av.length) {
-        for (let i = 0; i < an.length; i++) {
-          const key = an[i];
-          const value = av[i];
-          this.arguments[key] = value;
-        }
-      } else {
-        console.error(
-          colors.brightRed("--arg and --argv must be balanced") + ": ",
-          `there are ${colors.yellow(an.length.toString())} arg names and ${
-            colors.yellow(av.length.toString())
-          } values`,
-        );
-      }
-    }
-  }
 }
 
-export class PublishCommandHandlerPluginsManager<
-  T extends PublishCommandHandlerContext,
-> extends ex.fs.CommandProxyFileSystemPluginsManager<T> {
-  constructor(
-    pchc: T,
-    readonly pchOptions: PublishCommandHandlerOptions,
-  ) {
+export function publicationsControllerOptions(
+  caller: CommandHandlerCaller,
+  cliArgs: docopt.DocOptions,
+): PublicationsControllerOptions {
+  const {
+    "--project": projectArg,
+    "--hooks": hooksArg,
+    "--verbose": verboseArg,
+    "--dry-run": dryRunArg,
+    "--schedule": scheduleArg,
+    "<target>": targetsArg,
+    "--arg": argNames,
+    "--argv": argsValues,
+  } = cliArgs;
+  const projectHome = projectArg
+    ? projectArg as string
+    : (caller.projectHome || Deno.cwd());
+  const hooksGlobs = hooksArg as string[];
+  const targets = targetsArg as string[];
+  const schedule = scheduleArg ? scheduleArg.toString() : undefined;
+  const isDryRun = dryRunArg ? true : false;
+  const isVerbose = isDryRun || (verboseArg ? true : false);
+
+  const customArgs: Record<string, string> = {};
+  if (argNames) {
+    const an = argNames as string[];
+    const av = argsValues as string[];
+
+    if (an.length == av.length) {
+      for (let i = 0; i < an.length; i++) {
+        const key = an[i];
+        const value = av[i];
+        customArgs[key] = value;
+      }
+    } else {
+      console.error(
+        colors.brightRed("--arg and --argv must be balanced") + ": ",
+        `there are ${colors.yellow(an.length.toString())} arg names and ${
+          colors.yellow(av.length.toString())
+        } values`,
+      );
+    }
+  }
+
+  return {
+    projectHome,
+    hooksGlobs,
+    targets,
+    schedule,
+    isDryRun,
+    isVerbose,
+    arguments: customArgs,
+  };
+}
+
+export class PublicationsControllerPluginsManager<
+  O extends PublicationsControllerOptions,
+  C extends PublicationsController,
+> extends ex.fs.CommandProxyFileSystemPluginsManager<C> {
+  constructor(readonly pc: C, readonly cli: CliArgsSupplier, readonly pco: O) {
     super(
-      pchc,
-      {}, // TODO add allowable commands?
+      pc,
+      {}, // TODO add allowable commands for better error checking / typesafety?
       {
-        discoveryPath: pchOptions.projectHome,
-        localFsSources: pchOptions.hooksGlobs,
+        discoveryPath: pco.projectHome,
+        localFsSources: pco.hooksGlobs,
         shellCmdEnvVarsDefaultPrefix: "PUBCTLHOOK_",
       },
     );
   }
 
   enhanceShellCmd(
-    pc: ex.CommandProxyPluginContext<T>,
+    pc: ex.CommandProxyPluginContext<C>,
     suggestedCmd: string[],
   ): string[] {
     if (!isHookContext(pc)) throw new Error("pc must be HookContext");
     const cmd = [...suggestedCmd];
     cmd.push(pc.command.proxyCmd);
-    if (this.pchOptions.targets.length > 0) {
-      cmd.push(...this.pchOptions.targets);
+    if (this.pco.targets.length > 0) {
+      cmd.push(...this.pco.targets);
     }
-    if (this.pchOptions.isVerbose) cmd.push("--verbose");
-    if (this.pchOptions.isDryRun) cmd.push("--dry-run");
+    if (this.pco.isVerbose) cmd.push("--verbose");
+    if (this.pco.isDryRun) cmd.push("--dry-run");
     for (
-      const arg of Object.entries(pc.arguments || this.pchOptions.arguments)
+      const arg of Object.entries(pc.arguments || this.pco.arguments)
     ) {
       const [name, value] = arg;
       cmd.push(name, value);
@@ -268,7 +255,7 @@ export class PublishCommandHandlerPluginsManager<
   }
 
   prepareShellCmdEnvVars(
-    pc: ex.CommandProxyPluginContext<T>,
+    pc: ex.CommandProxyPluginContext<C>,
     envVarsPrefix: string,
   ): Record<string, string> {
     const result = super.prepareShellCmdEnvVars(pc, envVarsPrefix);
@@ -279,23 +266,23 @@ export class PublishCommandHandlerPluginsManager<
       );
     }
     const hookHome = path.dirname(pc.plugin.source.absPathAndFileName);
-    result[`${envVarsPrefix}VERBOSE`] = this.pchOptions.isVerbose ? "1" : "0";
-    result[`${envVarsPrefix}DRY_RUN`] = this.pchOptions.isDryRun ? "1" : "0";
-    result[`${envVarsPrefix}PROJECT_HOME_ABS`] = this.pchOptions.projectHome;
+    result[`${envVarsPrefix}VERBOSE`] = this.pco.isVerbose ? "1" : "0";
+    result[`${envVarsPrefix}DRY_RUN`] = this.pco.isDryRun ? "1" : "0";
+    result[`${envVarsPrefix}PROJECT_HOME_ABS`] = this.pco.projectHome;
     result[`${envVarsPrefix}PROJECT_HOME_REL`] = path.relative(
       hookHome,
-      this.pchOptions.projectHome,
+      this.pco.projectHome,
     );
     result[`${envVarsPrefix}OPTIONS_JSON`] = JSON.stringify(
-      this.pchOptions.cliOptions,
+      this.cli.cliArgs,
     );
-    if (this.pchOptions.schedule) {
-      result[`${envVarsPrefix}SCHEDULE`] = this.pchOptions.schedule;
+    if (this.pco.schedule) {
+      result[`${envVarsPrefix}SCHEDULE`] = this.pco.schedule;
     }
-    if (this.pchOptions.targets.length > 0) {
-      result[`${envVarsPrefix}TARGETS`] = this.pchOptions.targets.join(" ");
+    if (this.pco.targets.length > 0) {
+      result[`${envVarsPrefix}TARGETS`] = this.pco.targets.join(" ");
     }
-    const cmdArgs = pc.arguments || this.pchOptions.arguments;
+    const cmdArgs = pc.arguments || this.pco.arguments;
     if (Object.keys(cmdArgs).length > 0) {
       result[`${envVarsPrefix}ARGS_JSON`] = JSON.stringify(cmdArgs);
     }
@@ -303,16 +290,25 @@ export class PublishCommandHandlerPluginsManager<
   }
 }
 
-export class PublishCommandHandlerContext implements ex.PluginExecutive {
-  readonly publications: Record<string, Publication> = {};
-  readonly contentModules: config.ContentModule[] = [];
-  readonly pluginsMgr: PublishCommandHandlerPluginsManager<
-    PublishCommandHandlerContext
+export class PublicationsController
+  implements
+    p.PublicationsSupplier,
+    p.PublicationModulesSupplier,
+    ex.PluginExecutive {
+  readonly publications: Record<string, p.Publication> = {};
+  readonly publModules: p.PublicationModule[] = [];
+  readonly pluginsMgr: PublicationsControllerPluginsManager<
+    PublicationsControllerOptions,
+    PublicationsController
   >;
-  constructor(readonly options: PublishCommandHandlerOptions) {
-    this.pluginsMgr = new PublishCommandHandlerPluginsManager<
-      PublishCommandHandlerContext
-    >(this, options);
+  constructor(
+    readonly cli: CliArgsSupplier,
+    readonly pco: PublicationsControllerOptions,
+  ) {
+    this.pluginsMgr = new PublicationsControllerPluginsManager<
+      PublicationsControllerOptions,
+      PublicationsController
+    >(this, cli, pco);
   }
 
   async initContext(): Promise<void> {
@@ -320,13 +316,13 @@ export class PublishCommandHandlerContext implements ex.PluginExecutive {
   }
 
   publication(
-    publ: PublicationIdentity,
-  ): Publication | undefined {
+    publ: p.PublicationIdentity,
+  ): p.Publication | undefined {
     return this.publications[publ];
   }
 
   async hugoModInit(
-    publ: Publication,
+    publ: p.Publication,
     destPath: string,
     graph?: boolean,
   ): Promise<boolean> {
@@ -335,10 +331,10 @@ export class PublishCommandHandlerContext implements ex.PluginExecutive {
       `hugo mod init ${publ.hugoModuleName} --verbose`,
     );
     await shell.runShellCommand(hugoModInit, {
-      ...(this.options?.isVerbose
+      ...(this.pco.isVerbose
         ? shell.cliVerboseShellOutputOptions
         : shell.quietShellOutputOptions),
-      dryRun: this.options?.isDryRun,
+      dryRun: this.pco.isDryRun,
     });
     if (graph) {
       const confFileName = this.configureHugo(publ, destPath);
@@ -346,34 +342,34 @@ export class PublishCommandHandlerContext implements ex.PluginExecutive {
         `hugo mod graph --verbose --config ${confFileName} --log`,
       );
       await shell.runShellCommand(hugoModGraph, {
-        ...(this.options?.isVerbose
+        ...(this.pco.isVerbose
           ? shell.cliVerboseShellOutputOptions
           : shell.quietShellOutputOptions),
-        dryRun: this.options?.isDryRun,
+        dryRun: this.pco.isDryRun,
       });
     }
     return true;
   }
 
-  configureHugo(publ: Publication, destPath: string): string | undefined {
+  configureHugo(publ: p.Publication, destPath: string): string | undefined {
     const supplier = publ.configuration(this);
-    const fileName = config.persistConfiguration(
+    const fileName = hugo.persistConfiguration(
       destPath,
       supplier,
-      this.options?.isDryRun,
+      this.pco.isDryRun,
     );
     return fileName;
   }
 
   reportShellCmd(cmd: string): string {
-    if (this.options.isVerbose && !this.options.isDryRun) {
+    if (this.pco.isVerbose && !this.pco.isDryRun) {
       console.log(colors.brightCyan(cmd));
     }
     return cmd;
   }
 
   validateHooks(): void {
-    for (const glob of this.options.hooksGlobs) {
+    for (const glob of this.pco.hooksGlobs) {
       console.log(`Searched for hooks in '${colors.yellow(glob)}'`);
     }
 
@@ -383,21 +379,18 @@ export class PublishCommandHandlerContext implements ex.PluginExecutive {
         console.log("--", colors.brightCyan("Registered hooks"), "--");
         firstValid = false;
       }
-      const suggestedHookCtx: HookContext<PublishCommandHandlerContext> = {
+      const hookCtx: HookContext<PublicationsController> = {
         container: this,
         plugin: hook,
         command: { proxyCmd: HookLifecycleStep.DOCTOR },
         onActivity: (a: ex.PluginActivity): ex.PluginActivity => {
-          if (this.options.isVerbose) {
+          if (this.pco.isVerbose) {
             console.log(a.message);
           }
           return a;
         },
       };
-      const hookCtx = this.options.chsOptions.enhanceHookContext
-        ? this.options.chsOptions.enhanceHookContext(suggestedHookCtx)
-        : suggestedHookCtx;
-      if (ex.isShellExePlugin<PublishCommandHandlerContext>(hook)) {
+      if (ex.isShellExePlugin<PublicationsController>(hook)) {
         if (hook.envVars) {
           console.log(
             colors.yellow(hook.source.friendlyName),
@@ -458,7 +451,7 @@ export class PublishCommandHandlerContext implements ex.PluginExecutive {
     const {
       "publications": publications, // modern, synonym for site-identities
       "site-identities": siteIdentities, // legacy: TODO remove this
-    } = this.options.cliOptions;
+    } = this.cli.cliArgs;
     if (siteIdentities || publications) {
       this.inspectPublications();
       return true;
@@ -481,18 +474,18 @@ export class PublishCommandHandlerContext implements ex.PluginExecutive {
     await this.executeHooks({ proxyCmd: HookLifecycleStep.CLEAN });
     const hugoModClean = this.reportShellCmd(`hugox mod clean --all`);
     await shell.runShellCommand(hugoModClean, {
-      ...(this.options.isVerbose
+      ...(this.pco.isVerbose
         ? shell.cliVerboseShellOutputOptions
         : shell.quietShellOutputOptions),
-      dryRun: this.options.isDryRun,
+      dryRun: this.pco.isDryRun,
     });
     ["go.sum", "public", "resources"].forEach((f) => {
       if (fs.existsSync(f)) {
-        if (this.options.isDryRun) {
+        if (this.pco.isDryRun) {
           console.log("rm -f", colors.red(f));
         } else {
           Deno.removeSync(f, { recursive: true });
-          if (this.options.isVerbose) console.log(colors.red(`deleted ${f}`));
+          if (this.pco.isVerbose) console.log(colors.red(`deleted ${f}`));
         }
       }
     });
@@ -514,31 +507,31 @@ export class PublishCommandHandlerContext implements ex.PluginExecutive {
       `udd pubctl.ts ${denoModules.join(" ")}`,
     );
     await shell.runShellCommand(updatePkgs, {
-      ...(this.options.isVerbose
+      ...(this.pco.isVerbose
         ? shell.cliVerboseShellOutputOptions
         : shell.quietShellOutputOptions),
-      dryRun: this.options.isDryRun,
+      dryRun: this.pco.isDryRun,
     });
     this.executeHooks({ proxyCmd: HookLifecycleStep.UPDATE });
   }
 }
 
-export async function hugoInitHandler(
-  ctx: PublishCommandHandlerContext,
+export async function hugoInitHandler<C extends PublicationsController>(
+  ctx: C,
 ): Promise<true | void> {
   const {
     "init": init,
     "--site": siteID,
     "--dest": destPath,
     "--graph": graph,
-  } = ctx.options.cliOptions;
+  } = ctx.cli.cliArgs;
   if (init && siteID) {
     const identity = siteID.toString();
     const publ = ctx.publication(identity);
     if (publ) {
       await ctx.hugoModInit(
         publ,
-        destPath ? destPath.toString() : ctx.options.projectHome,
+        destPath ? destPath.toString() : ctx.pco.projectHome,
         graph ? true : false,
       );
     } else {
@@ -556,22 +549,22 @@ export async function hugoInitHandler(
 
 // deno-lint-ignore require-await
 export async function hugoConfigureHandler(
-  ctx: PublishCommandHandlerContext,
+  ctx: PublicationsController,
 ): Promise<true | void> {
   const {
     "configure": configure,
     "--site": siteID,
     "--dest": destPath,
-  } = ctx.options.cliOptions;
+  } = ctx.cli.cliArgs;
   if (configure && siteID) {
     const identity = siteID.toString();
     const publ = ctx.publication(identity);
     if (publ) {
       const fileName = ctx.configureHugo(
         publ,
-        (destPath ? destPath.toString() : undefined) || ctx.options.projectHome,
+        (destPath ? destPath.toString() : undefined) || ctx.pco.projectHome,
       );
-      if (fileName && ctx.options.isVerbose) {
+      if (fileName && ctx.pco.isVerbose) {
         console.log(fileName);
       }
     } else {
@@ -588,9 +581,9 @@ export async function hugoConfigureHandler(
 }
 
 export async function installHandler(
-  ctx: PublishCommandHandlerContext,
+  ctx: PublicationsController,
 ): Promise<true | void> {
-  const { "install": install } = ctx.options.cliOptions;
+  const { "install": install } = ctx.cli.cliArgs;
   if (install) {
     await ctx.executeHooks({ proxyCmd: HookLifecycleStep.INSTALL });
     return true;
@@ -599,9 +592,9 @@ export async function installHandler(
 
 // deno-lint-ignore require-await
 export async function validateHooksHandler(
-  ctx: PublishCommandHandlerContext,
+  ctx: PublicationsController,
 ): Promise<true | void> {
-  const { "validate": validate, "hooks": hooks } = ctx.options.cliOptions;
+  const { "validate": validate, "hooks": hooks } = ctx.cli.cliArgs;
   if (validate && hooks) {
     ctx.validateHooks();
     return true;
@@ -609,9 +602,9 @@ export async function validateHooksHandler(
 }
 
 export async function inspectHandler(
-  ctx: PublishCommandHandlerContext,
+  ctx: PublicationsController,
 ): Promise<true | void> {
-  const { "inspect": inspect } = ctx.options.cliOptions;
+  const { "inspect": inspect } = ctx.cli.cliArgs;
   if (inspect) {
     await ctx.inspect();
     return true;
@@ -619,9 +612,9 @@ export async function inspectHandler(
 }
 
 export async function describeHandler(
-  ctx: PublishCommandHandlerContext,
+  ctx: PublicationsController,
 ): Promise<true | void> {
-  const { "describe": describe } = ctx.options.cliOptions;
+  const { "describe": describe } = ctx.cli.cliArgs;
   if (describe) {
     await ctx.executeHooks({ proxyCmd: HookLifecycleStep.DESCRIBE });
     return true;
@@ -629,9 +622,9 @@ export async function describeHandler(
 }
 
 export async function generateHandler(
-  ctx: PublishCommandHandlerContext,
+  ctx: PublicationsController,
 ): Promise<true | void> {
-  const { "generate": generate } = ctx.options.cliOptions;
+  const { "generate": generate } = ctx.cli.cliArgs;
   if (generate) {
     await ctx.generate();
     return true;
@@ -639,9 +632,9 @@ export async function generateHandler(
 }
 
 export async function buildHandler(
-  ctx: PublishCommandHandlerContext,
+  ctx: PublicationsController,
 ): Promise<true | void> {
-  const { "build": build } = ctx.options.cliOptions;
+  const { "build": build } = ctx.cli.cliArgs;
   if (build) {
     await ctx.build();
     return true;
@@ -649,9 +642,9 @@ export async function buildHandler(
 }
 
 export async function cleanHandler(
-  ctx: PublishCommandHandlerContext,
+  ctx: PublicationsController,
 ): Promise<true | void> {
-  const { "clean": clean } = ctx.options.cliOptions;
+  const { "clean": clean } = ctx.cli.cliArgs;
   if (clean) {
     await ctx.clean();
     return true;
@@ -659,9 +652,9 @@ export async function cleanHandler(
 }
 
 export async function doctorHandler(
-  ctx: PublishCommandHandlerContext,
+  ctx: PublicationsController,
 ): Promise<true | void> {
-  const { "doctor": doctor } = ctx.options.cliOptions;
+  const { "doctor": doctor } = ctx.cli.cliArgs;
   if (doctor) {
     await ctx.executeHooks({ proxyCmd: HookLifecycleStep.DOCTOR });
     return true;
@@ -669,9 +662,9 @@ export async function doctorHandler(
 }
 
 export async function updateHandler(
-  ctx: PublishCommandHandlerContext,
+  ctx: PublicationsController,
 ): Promise<true | void> {
-  const { "update": update } = ctx.options.cliOptions;
+  const { "update": update } = ctx.cli.cliArgs;
   if (update) {
     await ctx.update();
     return true;
@@ -679,13 +672,10 @@ export async function updateHandler(
 }
 
 export async function versionHandler(
-  ctx: PublishCommandHandlerContext,
+  ctx: PublicationsController,
 ): Promise<true | void> {
-  const { "version": version } = ctx.options.cliOptions;
+  const { "version": version } = ctx.cli.cliArgs;
   if (version) {
-    console.log(
-      `pubctl ${colors.yellow(ctx.options.chsOptions.version)}`,
-    );
     console.log(
       `hugo-aide ${colors.yellow(await determineVersion(import.meta.url))}`,
     );
@@ -708,43 +698,44 @@ export const commonHandlers = [
   versionHandler,
 ];
 
-export async function CLI(
-  chsOptions: CommandHandlerSpecOptions,
+export interface CommandHandlerSpecOptions<C extends PublicationsController> {
+  readonly docoptSpec?: (caller: CommandHandlerCaller) => string;
+  readonly prepareControllerOptions?: (
+    caller: CommandHandlerCaller,
+    cliArgs: docopt.DocOptions,
+  ) => PublicationsControllerOptions;
+  readonly prepareController?: (
+    caller: CommandHandlerCaller,
+    cliArgs: docopt.DocOptions,
+    options: PublicationsControllerOptions,
+  ) => C;
+}
+
+export async function CLI<
+  C extends PublicationsController,
+>(
+  caller: CommandHandlerCaller,
+  options: CommandHandlerSpecOptions<C> = {},
 ): Promise<void> {
-  const {
-    docoptSpec,
-    customHandlers,
-    prepareCmdHandlerOptions,
-    prepareCmdHandlerContext,
-  } = chsOptions;
+  const { prepareController } = options;
   try {
-    const cliOptions = docopt.default(
-      docoptSpec ? docoptSpec(chsOptions) : defaultDocoptSpec(chsOptions),
-    );
-    const pchOptions = prepareCmdHandlerOptions
-      ? prepareCmdHandlerOptions(chsOptions, cliOptions)
-      : new PublishCommandHandlerOptions(
-        chsOptions,
-        cliOptions,
-      );
-    const context = prepareCmdHandlerContext
-      ? prepareCmdHandlerContext(pchOptions)
-      : new PublishCommandHandlerContext(pchOptions);
+    const docoptSpecFn = options.docoptSpec || defaultDocoptSpec;
+    const prepareControllerOptions = options.prepareControllerOptions ||
+      publicationsControllerOptions;
+    const cliArgs = docopt.default(docoptSpecFn(caller));
+    const pchOptions = prepareControllerOptions(caller, cliArgs);
+    const context = prepareController
+      ? prepareController(caller, cliArgs, pchOptions)
+      : new PublicationsController({ cliArgs }, pchOptions);
     await context.initContext();
     let handled: true | void;
-    if (customHandlers) {
-      for (const handler of customHandlers) {
-        handled = await handler(context);
-        if (handled) break;
-      }
-    }
     for (const handler of commonHandlers) {
       handled = await handler(context);
       if (handled) break;
     }
     if (!handled) {
       console.error("Unable to handle validly parsed docoptSpec:");
-      console.dir(cliOptions);
+      console.dir(cliArgs);
     }
   } catch (e) {
     console.error(e.message);
