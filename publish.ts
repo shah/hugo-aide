@@ -532,7 +532,6 @@ export async function hugoInitHandler(
     "--dest": destPath,
     "--graph": graph,
   } = ctx.options.cliOptions;
-  console.log(init, siteID);
   if (init && siteID) {
     const identity = siteID.toString();
     const publ = ctx.publication(identity);
