@@ -35,36 +35,46 @@ export interface CommandHandlerCaller {
 }
 
 export function defaultDocoptSpec(caller: CommandHandlerCaller): string {
+  const targetable = "[<target>]...";
+  const schedulable = "--schedule=<cronSpec>";
+  const paths = `[--project=<path>] [--union-home=<path>]`;
+  const hookable = `[--hooks=<glob>]...`;
+  const observable = "[--verbose] [--dry-run]";
+  const customizable = `[--arg=<name>]... [--argv=<value>]...`;
+  const stdArgs =
+    `${targetable} ${paths} ${hookable} ${observable} ${customizable}`;
   return `
-Publication Controller ${caller.version}.
+Publication Orchestrator ${caller.version}.
 
 Usage:
-  pubctl init (--site=<site-id> | --module=<module-id>...) [--port=<port>] [--exclude-taxn] [--dest=<dest>] [--graph] [--verbose] [--dry-run]
-  pubctl configure (--site=<site-id> | --module=<module-id>...) [--port=<port>] [--exclude-taxn] [--dest=<dest>] [--verbose] [--dry-run]
-  pubctl install [<target>]... [--project=<path>] [--hooks=<glob>]... [--dry-run] [--verbose] [--arg=<name>]... [--argv=<value>]...
-  pubctl validate hooks [<target>]... [--project=<path>] [--hooks=<glob>]... [--dry-run] [--verbose] [--arg=<name>]... [--argv=<value>]...
-  pubctl describe [<target>]... [--project=<path>] [--hooks=<glob>]... [--arg=<name>]... [--argv=<value>]...
-  pubctl inspect (publications | site-identities | [<target>]...) [--project=<path>] [--hooks=<glob>]... [--arg=<name>]... [--argv=<value>]...
-  pubctl build [<target>]... [--schedule=<cronSpec>] [--project=<path>] [--hooks=<glob>]... [--dry-run] [--verbose] [--arg=<name>]... [--argv=<value>]...
-  pubctl generate [<target>]... [--schedule=<cronSpec>] [--project=<path>] [--hooks=<glob>]... [--dry-run] [--verbose] [--arg=<name>]... [--argv=<value>]...
-  pubctl clean [<target>]... [--project=<path>] [--hooks=<glob>]... [--dry-run] [--verbose] [--arg=<name>]... [--argv=<value>]...
-  pubctl doctor [<target>]... [--project=<path>] [--hooks=<glob>]... [--dry-run] [--verbose] [--arg=<name>]... [--argv=<value>]...
-  pubctl update [<target>]... [--project=<path>] [--hooks=<glob>]... [--dry-run] [--verbose] [--arg=<name>]... [--argv=<value>]...
+  pubctl init workspace ${stdArgs}
+  pubctl hugo init config (--publ=<publ-id> | --module=<module-id>...) ${targetable} [--port=<port>] [--exclude-taxn] [--dest=<dest>] [--graph] ${paths} ${hookable} ${observable} ${customizable}
+  pubctl hugo inspect ${targetable} ${paths} ${hookable} ${customizable}
+  pubctl install ${stdArgs}
+  pubctl validate hooks ${stdArgs}
+  pubctl describe ${targetable} ${paths} ${hookable} ${customizable}
+  pubctl inspect (publications | publishable-modules | ${targetable}) ${paths} ${hookable} ${customizable}
+  pubctl build ${targetable} ${schedulable} ${paths} ${hookable} ${observable} ${customizable}
+  pubctl generate ${targetable} ${schedulable} ${paths} ${hookable} ${observable} ${customizable}
+  pubctl clean ${stdArgs}
+  pubctl doctor ${stdArgs}
+  pubctl update ${stdArgs}
   pubctl version
   pubctl -h | --help
 
 Options:
-  <target>               One or more identifiers that the hook will understand
-  --site-id=PUBLICATION  A Hugo Configuration supplier name
-  --module=MODULE        One or more Hugo module identifiers that should be included in the init or configure process
-  --schedule=CRONSPEC    Cron spec for schedule [default: * * * * *]
-  --project=PATH         The project's home directory, defaults to current directory
-  --hooks=GLOB           Glob of hooks which will be found and executed [default: **/*/*.hook-pubctl.*]
-  --dry-run              Show what will be done (but don't actually do it) [default: false]
-  --verbose              Be explicit about what's going on [default: false]
-  --arg=NAME             Name of an arbitrary argument to pass to handler
-  --argv=VALUE           Value of an arbitrary argument to pass to handler, must match same order as --arg
-  -h --help              Show this screen
+  <target>                 One or more identifiers that the hook will understand
+  --union-home=PATH        The path where workspace dependencies will be stored and 'union'ed into the publication [default: union]
+  --publ-id=PUBLICATION    A publication configuration supplier name [default: sandbox]
+  --module=MODULE          One or more Hugo module identifiers that should be included in the init or configure process
+  --schedule=CRONSPEC      Cron spec for schedule [default: * * * * *]
+  --project=PATH           The project's home directory, defaults to current directory [default: .]
+  --hooks=GLOB             Glob of hooks which will be found and executed [default: {content,data,static}/**/*.hook-pubctl.*]
+  --dry-run                Show what will be done (but don't actually do it) [default: false]
+  --verbose                Be explicit about what's going on [default: false]
+  --arg=NAME               Name of an arbitrary argument to pass to handler
+  --argv=VALUE             Value of an arbitrary argument to pass to handler, must match same order as --arg
+  -h --help                Show this screen
 `;
 }
 
@@ -154,6 +164,7 @@ export interface CliArgsSupplier {
 
 export interface PublicationsControllerOptions {
   readonly projectHome: string;
+  readonly unionHome: string;
   readonly hooksGlobs: string[];
   readonly targets: string[];
   readonly arguments: Record<string, string>;
@@ -168,6 +179,7 @@ export function publicationsControllerOptions(
 ): PublicationsControllerOptions {
   const {
     "--project": projectArg,
+    "--union-home": unionPathArg,
     "--hooks": hooksArg,
     "--verbose": verboseArg,
     "--dry-run": dryRunArg,
@@ -179,6 +191,9 @@ export function publicationsControllerOptions(
   const projectHome = projectArg
     ? projectArg as string
     : (caller.projectHome || Deno.cwd());
+  const unionHome = unionPathArg
+    ? unionPathArg as string
+    : (path.join(projectHome, "union"));
   const hooksGlobs = hooksArg as string[];
   const targets = targetsArg as string[];
   const schedule = scheduleArg ? scheduleArg.toString() : undefined;
@@ -208,6 +223,7 @@ export function publicationsControllerOptions(
 
   return {
     projectHome,
+    unionHome,
     hooksGlobs,
     targets,
     schedule,
@@ -321,7 +337,7 @@ export class PublicationsController
     return this.publications[publ];
   }
 
-  async hugoModInit(
+  async hugoInit(
     publ: p.Publication,
     destPath: string,
     graph?: boolean,
@@ -348,6 +364,12 @@ export class PublicationsController
         dryRun: this.pco.isDryRun,
       });
     }
+    return true;
+  }
+
+  // deno-lint-ignore require-await
+  async hugoInspect(): Promise<boolean> {
+    // TODO: add common Hugo-specific inspections
     return true;
   }
 
@@ -448,11 +470,8 @@ export class PublicationsController
   }
 
   async inspect() {
-    const {
-      "publications": publications, // modern, synonym for site-identities
-      "site-identities": siteIdentities, // legacy: TODO remove this
-    } = this.cli.cliArgs;
-    if (siteIdentities || publications) {
+    const { "publications": publications } = this.cli.cliArgs;
+    if (publications) {
       this.inspectPublications();
       return true;
     }
@@ -520,16 +539,17 @@ export async function hugoInitHandler<C extends PublicationsController>(
   ctx: C,
 ): Promise<true | void> {
   const {
+    "hugo": hugo,
     "init": init,
-    "--site": siteID,
+    "--publ": publID,
     "--dest": destPath,
     "--graph": graph,
   } = ctx.cli.cliArgs;
-  if (init && siteID) {
-    const identity = siteID.toString();
+  if (hugo && init && publID) {
+    const identity = publID.toString();
     const publ = ctx.publication(identity);
     if (publ) {
-      await ctx.hugoModInit(
+      await ctx.hugoInit(
         publ,
         destPath ? destPath.toString() : ctx.pco.projectHome,
         graph ? true : false,
@@ -547,35 +567,15 @@ export async function hugoInitHandler<C extends PublicationsController>(
   }
 }
 
-// deno-lint-ignore require-await
-export async function hugoConfigureHandler(
-  ctx: PublicationsController,
+export async function hugoInspectHandler<C extends PublicationsController>(
+  ctx: C,
 ): Promise<true | void> {
   const {
-    "configure": configure,
-    "--site": siteID,
-    "--dest": destPath,
+    "hugo": hugo,
+    "inspect": inspect,
   } = ctx.cli.cliArgs;
-  if (configure && siteID) {
-    const identity = siteID.toString();
-    const publ = ctx.publication(identity);
-    if (publ) {
-      const fileName = ctx.configureHugo(
-        publ,
-        (destPath ? destPath.toString() : undefined) || ctx.pco.projectHome,
-      );
-      if (fileName && ctx.pco.isVerbose) {
-        console.log(fileName);
-      }
-    } else {
-      console.error(
-        colors.red(
-          `unable to configure publication ID '${
-            colors.yellow(identity)
-          }': no definition found`,
-        ),
-      );
-    }
+  if (hugo && inspect) {
+    await ctx.hugoInspect();
     return true;
   }
 }
@@ -685,7 +685,7 @@ export async function versionHandler(
 
 export const commonHandlers = [
   hugoInitHandler,
-  hugoConfigureHandler,
+  hugoInspectHandler,
   describeHandler,
   installHandler,
   validateHooksHandler,
