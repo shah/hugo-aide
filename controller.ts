@@ -48,7 +48,7 @@ Publication Orchestrator ${caller.version}.
 
 Usage:
   pubctl init workspace ${stdArgs}
-  pubctl hugo init config (--publ=<publ-id> | --module=<module-id>...) ${targetable} [--port=<port>] [--exclude-taxn] [--dest=<dest>] [--graph] ${paths} ${hookable} ${observable} ${customizable}
+  pubctl hugo init (--publ=<publ-id> | --module=<module-id>...) ${targetable} [--port=<port>] [--exclude-taxn] [--dest=<dest>] [--graph] ${paths} ${hookable} ${observable} ${customizable}
   pubctl hugo inspect ${targetable} ${paths} ${hookable} ${customizable}
   pubctl install ${stdArgs}
   pubctl validate hooks ${stdArgs}
