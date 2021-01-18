@@ -338,7 +338,7 @@ export class PublicationsController
   }
 
   async hugoInit(
-    publ: p.Publication,
+    publ: hugo.HugoPublication,
     destPath: string,
     graph?: boolean,
   ): Promise<boolean> {
@@ -373,8 +373,11 @@ export class PublicationsController
     return true;
   }
 
-  configureHugo(publ: p.Publication, destPath: string): string | undefined {
-    const supplier = publ.configuration(this);
+  configureHugo(
+    publ: hugo.HugoPublication,
+    destPath: string,
+  ): string | undefined {
+    const supplier = publ.hugoConfigSupplier(this);
     const fileName = hugo.persistConfiguration(
       destPath,
       supplier,
@@ -470,22 +473,34 @@ export class PublicationsController
   }
 
   async inspect() {
-    const { "publications": publications } = this.cli.cliArgs;
+    const {
+      "publications": publications,
+      "publishable-modules": publishableModules,
+    } = this.cli.cliArgs;
     if (publications) {
       this.inspectPublications();
       return true;
     }
+    if (publishableModules) {
+      this.publModules.forEach((pm) => {
+        console.log(colors.green(pm.identity));
+      });
+      return true;
+    }
+
     await this.executeHooks({ proxyCmd: HookLifecycleStep.INSPECT });
   }
 
   inspectPublications(): void {
     Object.values(this.publications).forEach((publ) => {
-      const hc = publ.configuration(this);
-      console.log(
-        `${colors.green(publ.identity)}: ${
-          colors.blue(hc.hugoConfigFileName || "<no name>")
-        }`,
-      );
+      if (hugo.isHugoPublication(publ)) {
+        const hc = publ.hugoConfigSupplier(this);
+        console.log(
+          `${colors.green(publ.identity)}: ${
+            colors.blue(hc.hugoConfigFileName || "<no name>")
+          }`,
+        );
+      }
     });
   }
 
@@ -539,29 +554,35 @@ export async function hugoInitHandler<C extends PublicationsController>(
   ctx: C,
 ): Promise<true | void> {
   const {
-    "hugo": hugo,
+    "hugo": hugoArg,
     "init": init,
     "--publ": publID,
     "--dest": destPath,
     "--graph": graph,
   } = ctx.cli.cliArgs;
-  if (hugo && init && publID) {
+  if (hugoArg && init && publID) {
     const identity = publID.toString();
     const publ = ctx.publication(identity);
     if (publ) {
-      await ctx.hugoInit(
-        publ,
-        destPath ? destPath.toString() : ctx.pco.projectHome,
-        graph ? true : false,
-      );
-    } else {
-      console.error(
-        colors.red(
-          `unable to init publication ID '${
+      if (hugo.isHugoPublication(publ)) {
+        await ctx.hugoInit(
+          publ,
+          destPath ? destPath.toString() : ctx.pco.projectHome,
+          graph ? true : false,
+        );
+      } else {
+        console.error(colors.red(
+          `publication ID '${
             colors.yellow(identity)
-          }': no definition found`,
-        ),
-      );
+          }' is not a Hugo publication`,
+        ));
+      }
+    } else {
+      console.error(colors.red(
+        `unable to init publication ID '${
+          colors.yellow(identity)
+        }': no definition found`,
+      ));
     }
     return true;
   }

@@ -1,11 +1,36 @@
+import * as ctl from "./controller.ts";
 import {
   encodingTOML as toml,
   encodingYAML as yaml,
+  govnData as gd,
   path,
   safety,
 } from "./deps.ts";
+import * as publ from "./publication.ts";
 
-export type HugoConfigurationIdentity = string;
+export interface HugoPublicationModule<O = void>
+  extends publ.PublicationModule {
+  readonly mergeHugoModuleImports: (
+    options: O,
+  ) => HugoConfigModuleImport[];
+  readonly mergeHugoParams?: (options: O) => HugoConfigParams;
+  readonly mergeHugoTaxonomies?: (options: O) => HugoConfigTaxonomies;
+  readonly mergeHugoPermalinks?: (options: O) => HugoConfigPermalinks;
+}
+
+export interface HugoPublication extends publ.Publication {
+  readonly hugoModuleName: string;
+  readonly hugoConfigSupplier: (
+    ctx: ctl.PublicationsController,
+  ) => HugoConfigurationSupplier;
+}
+
+export const isHugoPublication = safety.typeGuard<HugoPublication>(
+  "hugoModuleName",
+  "hugoConfigSupplier",
+);
+
+export type HugoConfigurationIdentity = publ.Identity;
 
 export interface HugoConfigurationSupplier {
   readonly hugoConfigFileName?: string;
@@ -40,29 +65,6 @@ export function persistConfiguration(
   }
   if (!dryRun) Deno.writeTextFileSync(fileName, configText);
   return fileName;
-}
-
-export interface HugoConfigurator {
-  readonly name: string;
-  readonly onImport?: (moduleUrl: string) => void;
-  readonly identities: () => HugoConfigurationIdentity[];
-  readonly configure: (
-    name: HugoConfigurationIdentity,
-  ) => HugoConfigurationSupplier | undefined;
-}
-
-export const isHugoConfiguratorStructure = safety.typeGuard<HugoConfigurator>(
-  "name",
-  "identities",
-  "configure",
-);
-
-export function isHugoConfigurator(o: unknown): o is HugoConfigurator {
-  if (isHugoConfiguratorStructure(o)) {
-    // TODO: add check to ensure proper function definition
-    return true;
-  }
-  return false;
 }
 
 export interface HugoConfiguration {
@@ -291,3 +293,47 @@ export const typicalHugoConfig: Omit<
     tag: "tags",
   },
 };
+
+export interface HugoPublicationModulesMergedConfig {
+  readonly imports: HugoConfigModuleImport[];
+  readonly params?: HugoConfigParams;
+  readonly taxonomies?: HugoConfigTaxonomies;
+  readonly permalinks?: HugoConfigPermalinks;
+}
+
+export function mergeHugoPublicationModulesConfig<O>(
+  modules: HugoPublicationModule<O>[],
+  options: O,
+): HugoPublicationModulesMergedConfig {
+  const imports: HugoConfigModuleImport[] = [];
+  let params: HugoConfigParams = {};
+  let taxonomies: HugoConfigTaxonomies = {};
+  let permalinks: HugoConfigPermalinks = {};
+  for (const mm of modules) {
+    imports.push(...mm.mergeHugoModuleImports(options));
+    if (mm.mergeHugoParams) {
+      params = gd.mergeDeep(
+        params,
+        mm.mergeHugoParams(options),
+      ) as HugoConfigParams;
+    }
+    if (mm.mergeHugoTaxonomies) {
+      taxonomies = gd.mergeDeep(
+        taxonomies,
+        mm.mergeHugoTaxonomies(options),
+      ) as HugoConfigTaxonomies;
+    }
+    if (mm.mergeHugoPermalinks) {
+      permalinks = gd.mergeDeep(
+        permalinks,
+        mm.mergeHugoPermalinks(options),
+      ) as HugoConfigPermalinks;
+    }
+  }
+  return {
+    imports,
+    params: Object.keys(params).length > 0 ? params : undefined,
+    taxonomies: Object.keys(taxonomies).length > 0 ? taxonomies : undefined,
+    permalinks: Object.keys(permalinks).length > 0 ? permalinks : undefined,
+  };
+}
