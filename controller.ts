@@ -165,12 +165,14 @@ export interface CliArgsSupplier {
 export interface PublicationsControllerOptions {
   readonly projectHome: string;
   readonly unionHome: string;
+  readonly htmlDestHome: string;
   readonly hooksGlobs: string[];
   readonly targets: string[];
   readonly arguments: Record<string, string>;
   readonly schedule?: string;
   readonly isVerbose: boolean;
   readonly isDryRun: boolean;
+  readonly buildHostID: string;
 }
 
 export function publicationsControllerOptions(
@@ -224,12 +226,14 @@ export function publicationsControllerOptions(
   return {
     projectHome,
     unionHome,
+    htmlDestHome: path.join(projectHome, "public"), // TODO: make "public" CLI configurable
     hooksGlobs,
     targets,
     schedule,
     isDryRun,
     isVerbose,
     arguments: customArgs,
+    buildHostID: Deno.hostname(), // TODO: make "buildHostID" CLI configurable
   };
 }
 
@@ -282,12 +286,25 @@ export class PublicationsControllerPluginsManager<
       );
     }
     const hookHome = path.dirname(pc.plugin.source.absPathAndFileName);
+    result[`${envVarsPrefix}BUILD_HOST_ID`] = this.pco.buildHostID;
+    result[`${envVarsPrefix}VERBOSE`] = this.pco.isVerbose ? "1" : "0";
     result[`${envVarsPrefix}VERBOSE`] = this.pco.isVerbose ? "1" : "0";
     result[`${envVarsPrefix}DRY_RUN`] = this.pco.isDryRun ? "1" : "0";
-    result[`${envVarsPrefix}PROJECT_HOME_ABS`] = this.pco.projectHome;
+    result[`${envVarsPrefix}PROJECT_HOME_ABS`] =
+      path.isAbsolute(this.pco.projectHome)
+        ? this.pco.projectHome
+        : path.join(Deno.cwd(), this.pco.projectHome);
     result[`${envVarsPrefix}PROJECT_HOME_REL`] = path.relative(
       hookHome,
       this.pco.projectHome,
+    );
+    result[`${envVarsPrefix}HTML_DEST_HOME_ABS`] =
+      path.isAbsolute(this.pco.projectHome)
+        ? this.pco.htmlDestHome
+        : path.join(Deno.cwd(), this.pco.htmlDestHome);
+    result[`${envVarsPrefix}HTML_DEST_HOME_REL`] = path.relative(
+      hookHome,
+      this.pco.htmlDestHome,
     );
     result[`${envVarsPrefix}OPTIONS_JSON`] = JSON.stringify(
       this.cli.cliArgs,
