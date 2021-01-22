@@ -18,28 +18,30 @@ export interface HugoPublicationModule<O = void>
   readonly mergeHugoPermalinks?: (options: O) => HugoConfigPermalinks;
 }
 
-export interface HugoPublication extends publ.Publication {
+export interface HugoPublication<O> extends publ.Publication {
   readonly hugoModuleName: string;
   readonly hugoConfigSupplier: (
     ctx: ctl.PublicationsController,
-  ) => HugoConfigurationSupplier;
+  ) => HugoConfigurationSupplier<O>;
 }
 
-export const isHugoPublication = safety.typeGuard<HugoPublication>(
+// deno-lint-ignore no-explicit-any
+export const isHugoPublication = safety.typeGuard<HugoPublication<any>>(
   "hugoModuleName",
   "hugoConfigSupplier",
 );
 
 export type HugoConfigurationIdentity = publ.Identity;
 
-export interface HugoConfigurationSupplier {
+export interface HugoConfigurationSupplier<O> {
   readonly hugoConfigFileName?: string;
   readonly hugoConfig: HugoConfiguration;
+  readonly hugoConfigModules: () => HugoPublicationModule<O>[];
 }
 
-export function persistConfiguration(
+export function persistConfiguration<O>(
   dir: string,
-  hcs: HugoConfigurationSupplier,
+  hcs: HugoConfigurationSupplier<O>,
   dryRun?: boolean,
 ): string {
   const fileName = `${dir}/${hcs.hugoConfigFileName || "config.toml"}`;

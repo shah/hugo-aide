@@ -48,7 +48,7 @@ Publication Orchestrator ${caller.version}.
 
 Usage:
   pubctl init workspace ${stdArgs}
-  pubctl hugo init (--publ=<publ-id> | --module=<module-id>...) ${targetable} [--port=<port>] [--exclude-taxn] [--dest=<dest>] [--graph] ${paths} ${hookable} ${observable} ${customizable}
+  pubctl hugo init ${targetable} --publ=<publ-id> [--module=<module-id>]... [--dest=<dest>] [--graph] ${paths} ${hookable} ${observable} ${customizable}
   pubctl hugo inspect ${targetable} ${paths} ${hookable} ${customizable}
   pubctl install ${stdArgs}
   pubctl validate hooks ${stdArgs}
@@ -173,6 +173,7 @@ export interface PublicationsControllerOptions {
   readonly isVerbose: boolean;
   readonly isDryRun: boolean;
   readonly buildHostID: string;
+  readonly customModules: p.PublicationModuleIdentity[];
 }
 
 export function publicationsControllerOptions(
@@ -181,6 +182,7 @@ export function publicationsControllerOptions(
 ): PublicationsControllerOptions {
   const {
     "--project": projectArg,
+    "--module": customModules,
     "--union-home": unionPathArg,
     "--hooks": hooksArg,
     "--verbose": verboseArg,
@@ -225,6 +227,7 @@ export function publicationsControllerOptions(
 
   return {
     projectHome,
+    customModules: Array.isArray(customModules) ? customModules : [],
     unionHome,
     htmlDestHome: path.join(projectHome, "public"), // TODO: make "public" CLI configurable
     hooksGlobs,
@@ -344,18 +347,22 @@ export class PublicationsController
     >(this, cli, pco);
   }
 
-  async initContext(): Promise<void> {
+  async initController(): Promise<void> {
     await this.pluginsMgr.init();
   }
 
   publication(
     publ: p.PublicationIdentity,
+    customModules?: p.PublicationModuleIdentity[],
   ): p.Publication | undefined {
+    // customModules are usually handled by their publications but available
+    // here in case it's necessary
     return this.publications[publ];
   }
 
   async hugoInit(
-    publ: hugo.HugoPublication,
+    // deno-lint-ignore no-explicit-any
+    publ: hugo.HugoPublication<any>,
     destPath: string,
     graph?: boolean,
   ): Promise<boolean> {
@@ -391,7 +398,8 @@ export class PublicationsController
   }
 
   configureHugo(
-    publ: hugo.HugoPublication,
+    // deno-lint-ignore no-explicit-any
+    publ: hugo.HugoPublication<any>,
     destPath: string,
   ): string | undefined {
     const supplier = publ.hugoConfigSupplier(this);
@@ -574,12 +582,18 @@ export async function hugoInitHandler<C extends PublicationsController>(
     "hugo": hugoArg,
     "init": init,
     "--publ": publID,
+    "--module": customModules,
     "--dest": destPath,
     "--graph": graph,
   } = ctx.cli.cliArgs;
   if (hugoArg && init && publID) {
     const identity = publID.toString();
-    const publ = ctx.publication(identity);
+    const publ = ctx.publication(
+      identity,
+      Array.isArray(customModules)
+        ? (customModules.length > 0 ? customModules : undefined)
+        : undefined,
+    );
     if (publ) {
       if (hugo.isHugoPublication(publ)) {
         await ctx.hugoInit(
@@ -765,7 +779,7 @@ export async function CLI<
     const context = prepareController
       ? prepareController(caller, cliArgs, pchOptions)
       : new PublicationsController({ cliArgs }, pchOptions);
-    await context.initContext();
+    await context.initController();
     let handled: true | void;
     for (const handler of commonHandlers) {
       handled = await handler(context);
