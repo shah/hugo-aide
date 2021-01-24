@@ -308,16 +308,27 @@ export function publicationsControllerOptions(
     }
   }
 
+  const projectHomeAbs = path.isAbsolute(projectHome)
+    ? projectHome
+    : path.resolve(Deno.cwd(), projectHome);
+  const observabilityPath = ".observability";
   return {
-    projectHome: path.isAbsolute(projectHome)
-      ? projectHome
-      : path.resolve(Deno.cwd(), projectHome),
+    projectHome: projectHomeAbs,
     customModules: Array.isArray(customModules) ? customModules : [],
-    unionHome: path.isAbsolute(unionHome) ? unionHome
-    : path.resolve(Deno.cwd(), unionHome),
-    htmlDestHome: path.join(projectHome, "public"), // TODO: make "public" CLI configurable
-    observabilitySrcHome: path.join(projectHome, "static", "analytics"),
-    observabilityHtmlDestHome: path.join(projectHome, "public", "analytics"),
+    unionHome: path.isAbsolute(unionHome)
+      ? unionHome
+      : path.resolve(Deno.cwd(), unionHome),
+    htmlDestHome: path.join(projectHomeAbs, "public"), // TODO: make "public" CLI configurable
+    observabilitySrcHome: path.join(
+      projectHomeAbs,
+      "static",
+      observabilityPath,
+    ),
+    observabilityHtmlDestHome: path.join(
+      projectHomeAbs,
+      "public",
+      observabilityPath,
+    ),
     hooksGlobs,
     targets,
     schedule,
@@ -471,6 +482,12 @@ export class PublicationsControllerPluginsManager<
     result[`${envVarsPrefix}HTML_DEST_HOME_REL`] = path.relative(
       hookHome,
       this.pco.htmlDestHome,
+    );
+    result[`${envVarsPrefix}OBSERVABILITY_HTML_DEST_HOME_ABS`] =
+      this.pco.observabilityHtmlDestHome;
+    result[`${envVarsPrefix}OBSERVABILITY_HTML_DEST_HOME_REL`] = path.relative(
+      hookHome,
+      this.pco.observabilityHtmlDestHome,
     );
     result[`${envVarsPrefix}OPTIONS_JSON`] = JSON.stringify(
       this.cli.cliArgs,
