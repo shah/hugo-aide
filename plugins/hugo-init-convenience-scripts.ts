@@ -87,13 +87,14 @@ export function publishScriptArtifact(
   } = automationFacts(hc);
   mta.appendText(
     hc,
-    `./pubctl-2021.ts clean
+    `./pubctl-2021.ts hugo clean
 ./pubctl-2021.ts generate --schedule="@publish" --verbose
 ./pubctl-2021.ts hugo init --publ=${hc.command.publ.identity} --verbose
 ./pubctl-2021.ts build prepare --schedule="@publish" --verbose
 mkdir -p ${observabilitySrcHomeRel}
 hugo --config ${hugoConfig.hugoConfigFileName} --templateMetrics --templateMetricsHints > ${observabilitySrcHomeRel}/${buildResultsFile}
 ./pubctl-2021.ts build finalize --schedule="@publish" --verbose
+mkdir -p ${observabilityHtmlDestHomeRel}
 cp ${observabilitySrcHomeRel}/${buildResultsFile} ${observabilityHtmlDestHomeRel}
 echo "Hugo build results in ${observabilityHtmlDestHomeRel}/${buildResultsFile}"
 `,
@@ -185,8 +186,10 @@ case $SERVER in
     file)
       regenerate
       ./pubctl-2021.ts build prepare --schedule="@publish" --verbose
+      mkdir -p ${observabilitySrcHomeRel}
       hugo --config ${hugoConfig.hugoConfigFileName} --templateMetrics --templateMetricsHints > ${observabilitySrcHomeRel}/${buildResultsFile}
       ./pubctl-2021.ts build finalize --schedule="@publish" --verbose
+      mkdir -p ${observabilityHtmlDestHomeRel}
       cp ${observabilitySrcHomeRel}/${buildResultsFile} ${observabilityHtmlDestHomeRel}
       echo "Hugo build results in ${observabilityHtmlDestHomeRel}/${buildResultsFile}"
       echo "Serving files in '${htmlDestHomeRel}'"
@@ -207,7 +210,7 @@ export function execute(
 ) {
   const publishSh = "publish.sh";
   const experimentSh = "experiment.sh";
-  const files = [publishSh];
+  const files = [publishSh, experimentSh];
   switch (hc.command.proxyCmd) {
     case publ.HookLifecycleStep.HUGO_INIT:
       hc.persistExecutableScriptArtifact(
