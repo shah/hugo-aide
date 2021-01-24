@@ -56,6 +56,7 @@ Usage:
   pubctl init workspace ${stdArgs}
   pubctl hugo init ${targetable} --publ=<publ-id> [--module=<module-id>]... [--dest=<dest>] ${paths} ${hookable} ${observable} ${customizable}
   pubctl hugo inspect ${targetable} ${paths} ${hookable} ${customizable}
+  pubctl hugo clean ${targetable} ${paths} ${hookable} ${customizable}
   pubctl install ${stdArgs}
   pubctl validate hooks ${stdArgs}
   pubctl describe ${targetable} ${paths} ${hookable} ${customizable}
@@ -93,6 +94,7 @@ export interface PublicationsControllerCommandHandler<
 export enum HookLifecycleStep {
   HUGO_INIT = "hugo-init",
   HUGO_INSPECT = "hugo-inspect",
+  HUGO_CLEAN = "hugo-clean",
   INSTALL = "install",
   UNINSTALL = "uninstall",
   DOCTOR = "doctor",
@@ -104,12 +106,43 @@ export enum HookLifecycleStep {
   UPDATE = "update",
 }
 
+export interface HugoPublProxyableCommand<O> extends ex.ProxyableCommand {
+  readonly publ: hugo.HugoPublication<O>;
+}
+
+export function isHugoPublProxyableCommand<O>(
+  o: unknown,
+): o is HugoPublProxyableCommand<O> {
+  const isHugoPublProxyableCommand = safety.typeGuard<
+    HugoPublProxyableCommand<O>
+  >("proxyCmd", "publ");
+  return isHugoPublProxyableCommand(o);
+}
+
+export function hugoPublProxyableCommand<O>(
+  step: HookLifecycleStep,
+  publ: hugo.HugoPublication<O>,
+): HugoPublProxyableCommand<O> {
+  return {
+    proxyCmd: step.toString(),
+    publ,
+  };
+}
+
 export interface HookContext<PC extends PublicationsController>
   extends ex.CommandProxyPluginContext<PC>, insp.InspectionContext, cm.Context {
   readonly pluginPathRelativeToProjectHome: string;
+  readonly createMutableTextArtifact: (
+    options: ap.MutableTextArtifactOptions,
+  ) => ap.MutableTextArtifact;
   readonly persistMarkdownArtifact: (
     artifactName: vm.TextValue,
     artifact: apd.MarkdownArtifact,
+    options?: ap.PersistArtifactOptions,
+  ) => ap.PersistenceResult | undefined;
+  readonly persistExecutableScriptArtifact: (
+    artifactName: vm.TextValue,
+    artifact: ap.TextArtifact,
     options?: ap.PersistArtifactOptions,
   ) => ap.PersistenceResult | undefined;
   readonly persistTextArtifact: (
@@ -156,6 +189,7 @@ export function defaultPubCtlHookSync<
 
     case HookLifecycleStep.HUGO_INIT:
     case HookLifecycleStep.HUGO_INSPECT:
+    case HookLifecycleStep.HUGO_CLEAN:
     case HookLifecycleStep.DESCRIBE:
     case HookLifecycleStep.GENERATE:
     case HookLifecycleStep.BUILD:
@@ -216,6 +250,8 @@ export interface PublicationsControllerOptions {
   readonly isDryRun: boolean;
   readonly buildHostID: string;
   readonly customModules: p.PublicationModuleIdentity[];
+  readonly observabilitySrcHome: string;
+  readonly observabilityHtmlDestHome: string;
 }
 
 export function publicationsControllerOptions(
@@ -280,6 +316,8 @@ export function publicationsControllerOptions(
     unionHome: path.isAbsolute(unionHome) ? unionHome
     : path.resolve(Deno.cwd(), unionHome),
     htmlDestHome: path.join(projectHome, "public"), // TODO: make "public" CLI configurable
+    observabilitySrcHome: path.join(projectHome, "static", "analytics"),
+    observabilityHtmlDestHome: path.join(projectHome, "public", "analytics"),
     hooksGlobs,
     targets,
     schedule,
@@ -322,27 +360,6 @@ export class PublicationsControllerPluginsManager<
     });
   }
 
-  registerDenoModule(potential: Omit<ex.DenoModulePlugin, "nature">): void {
-    const result = ex.registerDenoFunctionModule({
-      ...potential,
-      nature: { identity: "deno-module" },
-    });
-    if (ex.isValidPluginRegistration(result)) {
-      this.plugins.push(result.plugin);
-    } else {
-      console.error(
-        colors.red("Unable to register deno plugin"),
-        ":",
-        colors.yellow(result.source.friendlyName),
-      );
-      result.issues.forEach((i) => {
-        i.diagnostics.forEach((d) => {
-          console.error("  ", d);
-        });
-      });
-    }
-  }
-
   createExecutePluginContext(
     command: ex.ProxyableCommand,
     plugin: ex.Plugin,
@@ -365,12 +382,23 @@ export class PublicationsControllerPluginsManager<
             path.dirname(plugin.source.absPathAndFileName),
           )
           : "(ex.fs.isFileSystemPluginSource(plugin.source) is false)",
+      createMutableTextArtifact: (options) => {
+        return this.fsPH.createMutableTextArtifact(result, options);
+      },
       persistMarkdownArtifact: (artifactName, artifact, options?) => {
         return this.fsPH.persistTextArtifact(
           result,
           artifactName,
           artifact,
           options,
+        );
+      },
+      persistExecutableScriptArtifact: (artifactName, artifact, options?) => {
+        return this.fsPH.persistTextArtifact(
+          result,
+          artifactName,
+          artifact,
+          { chmod: 0o755, ...options },
         );
       },
       persistTextArtifact: (artifactName, artifact, options?) => {
@@ -500,7 +528,7 @@ export class PublicationsController
     publ: hugo.HugoPublication<any>,
     destPath: string,
   ): Promise<boolean> {
-    this.clean();
+    this.hugoClean();
     const hugoModInit = this.reportShellCmd(
       `hugo mod init ${publ.hugoModuleName} --verbose`,
     );
@@ -520,12 +548,27 @@ export class PublicationsController
         : shell.quietShellOutputOptions),
       dryRun: this.pco.isDryRun,
     });
-    await this.executeHooks({ proxyCmd: HookLifecycleStep.HUGO_INIT });
+    await this.executeHooks(
+      hugoPublProxyableCommand(HookLifecycleStep.HUGO_INIT, publ),
+    );
     return true;
   }
 
   async hugoInspect(): Promise<boolean> {
     await this.executeHooks({ proxyCmd: HookLifecycleStep.HUGO_INSPECT });
+    return true;
+  }
+
+  async hugoClean(): Promise<boolean> {
+    await this.clean();
+    await this.executeHooks({ proxyCmd: HookLifecycleStep.HUGO_CLEAN });
+    const hugoModClean = this.reportShellCmd(`hugox mod clean --all`);
+    await shell.runShellCommand(hugoModClean, {
+      ...(this.pco.isVerbose
+        ? shell.cliVerboseShellOutputOptions
+        : shell.quietShellOutputOptions),
+      dryRun: this.pco.isDryRun,
+    });
     return true;
   }
 
@@ -583,6 +626,12 @@ export class PublicationsController
               path.dirname(hook.source.absPathAndFileName),
             )
             : "(ex.fs.isFileSystemPluginSource(plugin.source) is false)",
+        createMutableTextArtifact: (options) => {
+          return new ap.DefaultTextArtifact(options);
+        },
+        persistExecutableScriptArtifact: () => {
+          return undefined;
+        },
         persistMarkdownArtifact: () => {
           return undefined;
         },
@@ -607,12 +656,24 @@ export class PublicationsController
         console.log(colors.dim(hook.shellCmd(hookCtx).join(" ")));
         continue;
       }
-      if (ex.isDenoFunctionModulePlugin(hook)) {
-        console.log(
-          colors.yellow(hook.source.friendlyName),
-          colors.green(hook.nature.identity),
-          hook.isAsync ? colors.brightBlue("async") : colors.brightBlue("sync"),
-        );
+      if (ex.isDenoModulePlugin(hook)) {
+        if (ex.isDenoFunctionModulePlugin(hook)) {
+          console.log(
+            colors.yellow(hook.source.friendlyName),
+            colors.green(hook.nature.identity),
+            hook.isAsync
+              ? colors.brightBlue("async function Deno module")
+              : colors.brightBlue("sync function Deno module"),
+          );
+        } else {
+          console.log(
+            colors.yellow(hook.source.friendlyName),
+            colors.green(hook.nature.identity),
+            ex.isActionPlugin(hook)
+              ? colors.brightBlue("executable Deno module")
+              : colors.brightBlue("not executable Deno module"),
+          );
+        }
       }
     }
 
@@ -681,13 +742,6 @@ export class PublicationsController
 
   async clean() {
     await this.executeHooks({ proxyCmd: HookLifecycleStep.CLEAN });
-    const hugoModClean = this.reportShellCmd(`hugox mod clean --all`);
-    await shell.runShellCommand(hugoModClean, {
-      ...(this.pco.isVerbose
-        ? shell.cliVerboseShellOutputOptions
-        : shell.quietShellOutputOptions),
-      dryRun: this.pco.isDryRun,
-    });
     ["go.sum", "public", "resources"].forEach((f) => {
       if (fs.existsSync(f)) {
         if (this.pco.isDryRun) {
@@ -776,6 +830,19 @@ export async function hugoInspectHandler<C extends PublicationsController>(
   } = ctx.cli.cliArgs;
   if (hugo && inspect) {
     await ctx.hugoInspect();
+    return true;
+  }
+}
+
+export async function hugoCleanHandler<C extends PublicationsController>(
+  ctx: C,
+): Promise<true | void> {
+  const {
+    "hugo": hugo,
+    "clean": clean,
+  } = ctx.cli.cliArgs;
+  if (hugo && clean) {
+    await ctx.hugoClean();
     return true;
   }
 }
@@ -885,6 +952,7 @@ export async function versionHandler(
 
 export const commonHandlers = [
   hugoInitHandler,
+  hugoCleanHandler,
   hugoInspectHandler,
   describeHandler,
   installHandler,
