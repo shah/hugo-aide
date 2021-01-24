@@ -31,10 +31,8 @@ export const isHugoPublication = safety.typeGuard<HugoPublication<any>>(
   "hugoConfigSupplier",
 );
 
-export type HugoConfigurationIdentity = publ.Identity;
-
 export interface HugoConfigurationSupplier<O> {
-  readonly hugoConfigFileName?: string;
+  readonly hugoConfigFileName: string;
   readonly hugoConfig: HugoConfiguration;
   readonly hugoConfigModules: () => HugoPublicationModule<O>[];
 }
