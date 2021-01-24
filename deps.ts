@@ -7,7 +7,11 @@ export * as docopt from "https://denopkg.com/Eyal-Shalev/docopt.js@v1.0.5/src/do
 export * as govnSvcImport from "https://denopkg.com/gov-suite/governed-service-helpers@v0.3.11/import.ts";
 export * as govnSvcVersion from "https://denopkg.com/gov-suite/governed-service-helpers@v0.3.11/version.ts";
 export * as govnData from "https://denopkg.com/gov-suite/governed-structured-data@v0.7.9/mod.ts";
-export * as extend from "https://denopkg.com/shah/ts-extend@v0.2.1/mod.ts";
+export * as artfPersistDoc from "https://denopkg.com/shah/artifacts-persistence@v1.2.0/document/mod.ts";
+export * as artfPersist from "https://denopkg.com/shah/artifacts-persistence@v1.2.0/mod.ts";
+export * as contextMgr from "https://denopkg.com/shah/context-manager@v1.0.7/mod.ts";
+export * as inflect from "https://denopkg.com/shah/text-inflect@v1.0.5/mod.ts";
+export * as extend from "https://denopkg.com/shah/ts-extend@v0.3.1/mod.ts";
 export * as inspectAsset from "https://denopkg.com/shah/ts-inspect@v0.9.1/asset/mod.ts";
 export * as inspect from "https://denopkg.com/shah/ts-inspect@v0.9.1/mod.ts";
 export * as shcGitLab from "https://denopkg.com/shah/ts-safe-http-client@v0.8.2/git/github/mod.ts";
@@ -15,3 +19,4 @@ export * as shcGitHub from "https://denopkg.com/shah/ts-safe-http-client@v0.8.2/
 export * as safeHttpClient from "https://denopkg.com/shah/ts-safe-http-client@v0.8.2/git/mod.ts";
 export * as safety from "https://denopkg.com/shah/ts-safety@v0.3.1/mod.ts";
 export * as shell from "https://denopkg.com/shah/tsd-shell@v0.9.2/mod.ts";
+export * as valueMgr from "https://denopkg.com/shah/value-manager@v1.0.10/mod.ts";
