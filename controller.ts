@@ -21,6 +21,7 @@ import {
   path,
   safety,
   shell,
+  uuid,
   valueMgr as vm,
 } from "./deps.ts";
 import * as hugo from "./hugo-config.ts";
@@ -47,22 +48,23 @@ export function defaultDocoptSpec(caller: CommandHandlerCaller): string {
   const hookable = `[--hooks=<glob>]...`;
   const observable = "[--verbose] [--dry-run]";
   const customizable = `[--arg=<name>]... [--argv=<value>]...`;
+  const transactionID = "[--tx-id=<uuid>]";
   const stdArgs =
-    `${targetable} ${paths} ${hookable} ${observable} ${customizable}`;
+    `${targetable} ${transactionID} ${paths} ${hookable} ${observable} ${customizable}`;
   return `
 Publication Orchestrator ${caller.version}.
 
 Usage:
   pubctl init workspace ${stdArgs}
-  pubctl hugo init ${targetable} --publ=<publ-id> [--module=<module-id>]... [--dest=<dest>] ${paths} ${hookable} ${observable} ${customizable}
-  pubctl hugo inspect ${targetable} ${paths} ${hookable} ${customizable}
-  pubctl hugo clean ${targetable} ${paths} ${hookable} ${customizable}
+  pubctl hugo init ${targetable} --publ=<publ-id> [--module=<module-id>]... [--dest=<dest>] ${transactionID} ${paths} ${hookable} ${observable} ${customizable}
+  pubctl hugo inspect ${targetable} ${transactionID} ${paths} ${hookable} ${customizable}
+  pubctl hugo clean ${targetable} ${transactionID} ${paths} ${hookable} ${customizable}
   pubctl install ${stdArgs}
   pubctl validate hooks ${stdArgs}
-  pubctl describe ${targetable} ${paths} ${hookable} ${customizable}
-  pubctl inspect (publications | publishable-modules | ${targetable}) ${paths} ${hookable} ${customizable}
-  pubctl build ${targetable} ${schedulable} ${paths} ${hookable} ${observable} ${customizable}
-  pubctl generate ${targetable} ${schedulable} ${paths} ${hookable} ${observable} ${customizable}
+  pubctl describe ${targetable} ${transactionID} ${paths} ${hookable} ${customizable}
+  pubctl inspect (publications | publishable-modules | ${targetable}) ${transactionID} ${paths} ${hookable} ${customizable}
+  pubctl build ${targetable} ${schedulable} ${transactionID} ${paths} ${hookable} ${observable} ${customizable}
+  pubctl generate ${targetable} ${schedulable} ${transactionID} ${paths} ${hookable} ${observable} ${customizable}
   pubctl clean ${stdArgs}
   pubctl doctor ${stdArgs}
   pubctl update ${stdArgs}
@@ -75,6 +77,7 @@ Options:
   --publ-id=PUBLICATION    A publication configuration supplier name [default: sandbox]
   --module=MODULE          One or more Hugo module identifiers that should be included in the init or configure process
   --schedule=CRONSPEC      Cron spec for schedule [default: * * * * *]
+  --tx-id=TRANSACTION_ID   Unique ID that can be used to identify a build or generator sequence (defaults to UUIDv4.generate())
   --project=PATH           The project's home directory, defaults to current directory [default: .]
   --hooks=GLOB             Glob of hooks which will be found and executed [default: {content,data,static}/**/*.hook-pubctl.*]
   --dry-run                Show what will be done (but don't actually do it) [default: false]
@@ -246,6 +249,7 @@ export interface PublicationsControllerOptions {
   readonly targets: string[];
   readonly arguments: Record<string, string>;
   readonly schedule?: string;
+  readonly transactionID: string;
   readonly isVerbose: boolean;
   readonly isDryRun: boolean;
   readonly buildHostID: string;
@@ -266,6 +270,7 @@ export function publicationsControllerOptions(
     "--verbose": verboseArg,
     "--dry-run": dryRunArg,
     "--schedule": scheduleArg,
+    "--tx-id": transactionIdArg,
     "<target>": targetsArg,
     "--arg": argNames,
     "--argv": argsValues,
@@ -281,6 +286,9 @@ export function publicationsControllerOptions(
   const schedule = scheduleArg ? scheduleArg.toString() : undefined;
   const isDryRun = dryRunArg ? true : false;
   const isVerbose = isDryRun || (verboseArg ? true : false);
+  const transactionID = transactionIdArg
+    ? transactionIdArg.toString()
+    : uuid.v4.generate();
 
   const defaultHookGlobs = ["*.hook-pubctl.*"];
   defaultHookGlobs.forEach((dg) => {
@@ -332,6 +340,7 @@ export function publicationsControllerOptions(
     hooksGlobs,
     targets,
     schedule,
+    transactionID,
     isDryRun,
     isVerbose,
     arguments: customArgs,
@@ -465,6 +474,7 @@ export class PublicationsControllerPluginsManager<
     }
     const hookHome = path.dirname(pc.plugin.source.absPathAndFileName);
     result[`${envVarsPrefix}BUILD_HOST_ID`] = this.pco.buildHostID;
+    result[`${envVarsPrefix}TRANSACTION_ID`] = this.pco.transactionID;
     result[`${envVarsPrefix}VERBOSE`] = this.pco.isVerbose ? "1" : "0";
     result[`${envVarsPrefix}DRY_RUN`] = this.pco.isDryRun ? "1" : "0";
     result[`${envVarsPrefix}PROJECT_HOME_ABS`] =
