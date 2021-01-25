@@ -87,13 +87,13 @@ export function publishScriptArtifact(
   } = automationFacts(hc);
   mta.appendText(
     hc,
-    `./pubctl-2021.ts hugo clean
-./pubctl-2021.ts generate --schedule="@publish" --verbose
-./pubctl-2021.ts hugo init --publ=${hc.command.publ.identity} --verbose
-./pubctl-2021.ts build prepare --schedule="@publish" --verbose
+    `./pubctl.ts hugo clean
+./pubctl.ts generate --schedule="@publish" --verbose
+./pubctl.ts hugo init --publ=${hc.command.publ.identity} --verbose
+./pubctl.ts build prepare --schedule="@publish" --verbose
 mkdir -p ${observabilitySrcHomeRel}
 hugo --config ${hugoConfig.hugoConfigFileName} --templateMetrics --templateMetricsHints > ${observabilitySrcHomeRel}/${buildResultsFile}
-./pubctl-2021.ts build finalize --schedule="@publish" --verbose
+./pubctl.ts build finalize --schedule="@publish" --verbose
 mkdir -p ${observabilityHtmlDestHomeRel}
 cp ${observabilitySrcHomeRel}/${buildResultsFile} ${observabilityHtmlDestHomeRel}
 echo "Hugo build results in ${observabilityHtmlDestHomeRel}/${buildResultsFile}"
@@ -153,9 +153,9 @@ PORT=${
 function regenerate {
   if [[ "$REGENERATE" -eq 1 ]]; then
     echo "Regenerating content and re-initializing Hugo config"
-    ./pubctl-2021.ts hugo clean
-    ./pubctl-2021.ts generate --schedule="@publish" --verbose
-    ./pubctl-2021.ts hugo init --publ=${hc.command.publ.identity}${
+    ./pubctl.ts hugo clean
+    ./pubctl.ts generate --schedule="@publish" --verbose
+    ./pubctl.ts hugo init --publ=${hc.command.publ.identity}${
       hc.container.pco.customModules.map((cm) => `--module=${cm}`).join(" ")
     } --verbose
   else
@@ -179,16 +179,16 @@ esac
 case $SERVER in
     hugo)
       regenerate
-      ./pubctl-2021.ts build prepare --schedule="@publish" --verbose
+      ./pubctl.ts build prepare --schedule="@publish" --verbose
       hugo server --config hugo-config.auto.toml --renderToDisk public --port $PORT --templateMetrics --templateMetricsHints
     ;;
 
     file)
       regenerate
-      ./pubctl-2021.ts build prepare --schedule="@publish" --verbose
+      ./pubctl.ts build prepare --schedule="@publish" --verbose
       mkdir -p ${observabilitySrcHomeRel}
       hugo --config ${hugoConfig.hugoConfigFileName} --templateMetrics --templateMetricsHints > ${observabilitySrcHomeRel}/${buildResultsFile}
-      ./pubctl-2021.ts build finalize --schedule="@publish" --verbose
+      ./pubctl.ts build finalize --schedule="@publish" --verbose
       mkdir -p ${observabilityHtmlDestHomeRel}
       cp ${observabilitySrcHomeRel}/${buildResultsFile} ${observabilityHtmlDestHomeRel}
       echo "Hugo build results in ${observabilityHtmlDestHomeRel}/${buildResultsFile}"
