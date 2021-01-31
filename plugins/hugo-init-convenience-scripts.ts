@@ -87,13 +87,14 @@ export function publishScriptArtifact(
   } = automationFacts(hc);
   mta.appendText(
     hc,
-    `./pubctl.ts hugo clean
-./pubctl.ts generate --schedule="@publish" --verbose
-./pubctl.ts hugo init --publ=${hc.command.publ.identity} --verbose
-./pubctl.ts build prepare --schedule="@publish" --verbose
+    `PUBCTL_TXID=$(curl --silent https://www.uuidgenerator.net/api/version4)
+./pubctl.ts hugo clean --tx-id="$PUBCTL_TXID"
+./pubctl.ts generate --schedule="@publish" --tx-id="$PUBCTL_TXID" --verbose
+./pubctl.ts hugo init --publ=${hc.command.publ.identity} --tx-id="$PUBCTL_TXID" --verbose
+./pubctl.ts build prepare --schedule="@publish" --tx-id="$PUBCTL_TXID" --verbose
 mkdir -p ${observabilitySrcHomeRel}
 hugo --config ${hugoConfig.hugoConfigFileName} --templateMetrics --templateMetricsHints > ${observabilitySrcHomeRel}/${buildResultsFile}
-./pubctl.ts build finalize --schedule="@publish" --verbose
+./pubctl.ts build finalize --schedule="@publish" --tx-id="$PUBCTL_TXID" --verbose
 mkdir -p ${observabilityHtmlDestHomeRel}
 cp ${observabilitySrcHomeRel}/${buildResultsFile} ${observabilityHtmlDestHomeRel}
 echo "Hugo build results in ${observabilityHtmlDestHomeRel}/${buildResultsFile}"
@@ -126,7 +127,8 @@ export function experimentScriptArtifact(
   } = automationFacts(hc);
   mta.appendText(
     hc,
-    `SERVER=\${1:-}
+    `PUBCTL_TXID=$(curl --silent https://www.uuidgenerator.net/api/version4)
+SERVER=\${1:-}
 if [ -z "$SERVER" ]; then
     echo "Expecting 'hugo', 'hugo-regen', 'file', or 'file-regen' as first parameter."
     echo "  * 'hugo' server will watch files for changes and reload them during experimentation."
@@ -153,11 +155,11 @@ PORT=${
 function regenerate {
   if [[ "$REGENERATE" -eq 1 ]]; then
     echo "Regenerating content and re-initializing Hugo config"
-    ./pubctl.ts hugo clean
-    ./pubctl.ts generate --schedule="@publish" --verbose
+    ./pubctl.ts hugo clean --tx-id="$PUBCTL_TXID"
+    ./pubctl.ts generate --schedule="@publish" --tx-id="$PUBCTL_TXID" --verbose
     ./pubctl.ts hugo init --publ=${hc.command.publ.identity}${
       hc.container.pco.customModules.map((cm) => `--module=${cm}`).join(" ")
-    } --verbose
+    } --tx-id="$PUBCTL_TXID" --verbose
   else
     echo "Not regenerating content or re-initializing Hugo config"
   fi
@@ -179,16 +181,16 @@ esac
 case $SERVER in
     hugo)
       regenerate
-      ./pubctl.ts build prepare --schedule="@publish" --verbose
+      ./pubctl.ts build prepare --schedule="@publish" --tx-id="$PUBCTL_TXID" --verbose
       hugo server --config hugo-config.auto.toml --renderToDisk public --port $PORT --templateMetrics --templateMetricsHints
     ;;
 
     file)
       regenerate
-      ./pubctl.ts build prepare --schedule="@publish" --verbose
+      ./pubctl.ts build prepare --schedule="@publish" --tx-id="$PUBCTL_TXID" --verbose
       mkdir -p ${observabilitySrcHomeRel}
       hugo --config ${hugoConfig.hugoConfigFileName} --templateMetrics --templateMetricsHints > ${observabilitySrcHomeRel}/${buildResultsFile}
-      ./pubctl.ts build finalize --schedule="@publish" --verbose
+      ./pubctl.ts build finalize --schedule="@publish" --tx-id="$PUBCTL_TXID" --verbose
       mkdir -p ${observabilityHtmlDestHomeRel}
       cp ${observabilitySrcHomeRel}/${buildResultsFile} ${observabilityHtmlDestHomeRel}
       echo "Hugo build results in ${observabilityHtmlDestHomeRel}/${buildResultsFile}"
