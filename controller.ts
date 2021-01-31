@@ -59,6 +59,7 @@ Usage:
   pubctl hugo init ${targetable} --publ=<publ-id> [--module=<module-id>]... [--dest=<dest>] ${transactionID} ${paths} ${hookable} ${observable} ${customizable}
   pubctl hugo inspect ${targetable} ${transactionID} ${paths} ${hookable} ${customizable}
   pubctl hugo clean ${targetable} ${transactionID} ${paths} ${hookable} ${customizable}
+  pubctl observability clean ${targetable} ${transactionID} ${paths} ${hookable} ${customizable}
   pubctl install ${stdArgs}
   pubctl validate hooks ${stdArgs}
   pubctl describe ${targetable} ${transactionID} ${paths} ${hookable} ${customizable}
@@ -95,6 +96,7 @@ export interface PublicationsControllerCommandHandler<
 }
 
 export enum HookLifecycleStep {
+  OBSERVABILITY_CLEAN = "observability-clean",
   HUGO_INIT = "hugo-init",
   HUGO_INSPECT = "hugo-inspect",
   HUGO_CLEAN = "hugo-clean",
@@ -190,6 +192,7 @@ export function defaultPubCtlHookSync<
       }
       return defaultPubCtlHookResultEnhancer(hc);
 
+    case HookLifecycleStep.OBSERVABILITY_CLEAN:
     case HookLifecycleStep.HUGO_INIT:
     case HookLifecycleStep.HUGO_INSPECT:
     case HookLifecycleStep.HUGO_CLEAN:
@@ -599,6 +602,13 @@ export class PublicationsController
     return true;
   }
 
+  async observabilityClean(): Promise<boolean> {
+    await this.executeHooks({
+      proxyCmd: HookLifecycleStep.OBSERVABILITY_CLEAN,
+    });
+    return true;
+  }
+
   configureHugo(
     // deno-lint-ignore no-explicit-any
     publ: hugo.HugoPublication<any>,
@@ -874,6 +884,21 @@ export async function hugoCleanHandler<C extends PublicationsController>(
   }
 }
 
+export async function observabilityHandler<
+  C extends PublicationsController,
+>(
+  ctx: C,
+): Promise<true | void> {
+  const {
+    "observability": observability,
+    "clean": clean,
+  } = ctx.cli.cliArgs;
+  if (observability && clean) {
+    await ctx.observabilityClean();
+    return true;
+  }
+}
+
 export async function installHandler(
   ctx: PublicationsController,
 ): Promise<true | void> {
@@ -978,6 +1003,7 @@ export async function versionHandler(
 }
 
 export const commonHandlers = [
+  observabilityHandler,
   hugoInitHandler,
   hugoCleanHandler,
   hugoInspectHandler,
