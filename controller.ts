@@ -44,7 +44,8 @@ export interface CommandHandlerCaller {
 export function defaultDocoptSpec(caller: CommandHandlerCaller): string {
   const targetable = "[<target>]...";
   const schedulable = "--schedule=<cronSpec>";
-  const paths = `[--project=<path>] [--union-home=<path>]`;
+  const paths =
+    `[--project=<path>] [--union-home=<path>] [--observability-src-home=<path>] [--observability-dest-home=<path>] [--observability-prom-metrics-file=<file>]`;
   const hookable = `[--hooks=<glob>]...`;
   const observable = "[--verbose] [--dry-run]";
   const customizable = `[--arg=<name>]... [--argv=<value>]...`;
@@ -59,7 +60,7 @@ Usage:
   pubctl hugo init ${targetable} --publ=<publ-id> [--module=<module-id>]... [--dest=<dest>] ${transactionID} ${paths} ${hookable} ${observable} ${customizable}
   pubctl hugo inspect ${targetable} ${transactionID} ${paths} ${hookable} ${customizable}
   pubctl hugo clean ${targetable} ${transactionID} ${paths} ${hookable} ${customizable}
-  pubctl observability clean ${targetable} ${transactionID} ${paths} ${hookable} ${customizable}
+  pubctl observability clean ${targetable} ${transactionID} ${paths} ${hookable} ${observable} ${customizable}
   pubctl install ${stdArgs}
   pubctl validate hooks ${stdArgs}
   pubctl describe ${targetable} ${transactionID} ${paths} ${hookable} ${customizable}
@@ -73,19 +74,22 @@ Usage:
   pubctl -h | --help
 
 Options:
-  <target>                 One or more identifiers that the hook will understand
-  --union-home=PATH        The path where workspace dependencies will be stored and 'union'ed into the publication [default: union]
-  --publ-id=PUBLICATION    A publication configuration supplier name [default: sandbox]
-  --module=MODULE          One or more Hugo module identifiers that should be included in the init or configure process
-  --schedule=CRONSPEC      Cron spec for schedule [default: * * * * *]
-  --tx-id=TRANSACTION_ID   Unique ID that can be used to identify a build or generator sequence (defaults to UUIDv4.generate())
-  --project=PATH           The project's home directory, defaults to current directory [default: .]
-  --hooks=GLOB             Glob of hooks which will be found and executed [default: {content,data,static}/**/*.hook-pubctl.*]
-  --dry-run                Show what will be done (but don't actually do it) [default: false]
-  --verbose                Be explicit about what's going on [default: false]
-  --arg=NAME               Name of an arbitrary argument to pass to handler
-  --argv=VALUE             Value of an arbitrary argument to pass to handler, must match same order as --arg
-  -h --help                Show this screen
+  <target>                                One or more identifiers that the hook will understand
+  --project=PATH                          The project's home directory, defaults to current directory [default: .]
+  --union-home=PATH                       The path where workspace dependencies will be stored and 'union'ed into the publication [default: union]
+  --observability-src-home=PATH           The path where observability files are prepared during build [default: static/.observability]
+  --observability-dest-home=PATH          The path where observability files are copied for publication [default: public/.observability]
+  --observability-prom-metrics-file=FILE  The file in the observability src path where the prometheus metrics are stored [default: static/.observability/publication-observability-prometheus-metrics.auto.txt]
+  --publ-id=PUBLICATION                   A publication configuration supplier name [default: sandbox]
+  --module=MODULE                         One or more Hugo module identifiers that should be included in the init or configure process
+  --schedule=CRONSPEC                     Cron spec for schedule [default: * * * * *]
+  --tx-id=TRANSACTION_ID                  Unique ID that can be used to identify a build or generator sequence (defaults to UUIDv4.generate())
+  --hooks=GLOB                            Glob of hooks which will be found and executed [default: {content,data,static}/**/*.hook-pubctl.*]
+  --dry-run                               Show what will be done (but don't actually do it) [default: false]
+  --verbose                               Be explicit about what's going on [default: false]
+  --arg=NAME                              Name of an arbitrary argument to pass to handler
+  --argv=VALUE                            Value of an arbitrary argument to pass to handler, must match same order as --arg
+  -h --help                               Show this screen
 `;
 }
 
@@ -204,7 +208,7 @@ export function defaultPubCtlHookSync<
     case HookLifecycleStep.UPDATE:
       if (hc.container.pco.isVerbose) {
         console.log(
-          colors.dim(`[${hc.plugin.source.abbreviatedName}]`),
+          colors.dim(`[${hc.plugin.source.abbreviatedName}]{INFO}`),
           `command '${colors.yellow(hc.command.proxyCmd)}' not implemented in`,
           colors.cyan(hc.plugin.source.friendlyName),
         );
@@ -214,7 +218,7 @@ export function defaultPubCtlHookSync<
 
   if (hc.container.pco.isVerbose) {
     console.log(
-      colors.dim(`[${hc.plugin.source.abbreviatedName}]`),
+      colors.dim(`[${hc.plugin.source.abbreviatedName}]{INFO}`),
       `unknown command '${colors.yellow(hc.command.proxyCmd)}' in ${
         colors.cyan(hc.plugin.source.friendlyName)
       }`,
@@ -258,6 +262,7 @@ export interface PublicationsControllerOptions {
   readonly buildHostID: string;
   readonly customModules: p.PublicationModuleIdentity[];
   readonly observabilitySrcHome: string;
+  readonly observabilityPromMetricsFile: string;
   readonly observabilityHtmlDestHome: string;
 }
 
@@ -269,6 +274,9 @@ export function publicationsControllerOptions(
     "--project": projectArg,
     "--module": customModules,
     "--union-home": unionPathArg,
+    "--observability-src-home": observabilitySrcPathArg,
+    "--observability-dest-home": observabilityDestPathArg,
+    "--observability-prom-metrics-file": observabilityPromMetricsFileArg,
     "--hooks": hooksArg,
     "--verbose": verboseArg,
     "--dry-run": dryRunArg,
@@ -284,6 +292,18 @@ export function publicationsControllerOptions(
   const unionHome = unionPathArg
     ? unionPathArg as string
     : (path.join(projectHome, "union"));
+  const observabilitySrcHome = observabilitySrcPathArg
+    ? observabilitySrcPathArg as string
+    : (path.join(projectHome, "static", ".observability"));
+  const observabilityDestHome = observabilityDestPathArg
+    ? observabilityDestPathArg as string
+    : (path.join(projectHome, "public", ".observability"));
+  const observabilityPromMetricsFile = observabilityPromMetricsFileArg
+    ? observabilityPromMetricsFileArg as string
+    : (path.join(
+      observabilitySrcHome,
+      "publication-observability-prometheus-metrics.auto.txt",
+    ));
   const hooksGlobs = hooksArg as string[];
   const targets = targetsArg as string[];
   const schedule = scheduleArg ? scheduleArg.toString() : undefined;
@@ -322,7 +342,6 @@ export function publicationsControllerOptions(
   const projectHomeAbs = path.isAbsolute(projectHome)
     ? projectHome
     : path.resolve(Deno.cwd(), projectHome);
-  const observabilityPath = ".observability";
   return {
     projectHome: projectHomeAbs,
     customModules: Array.isArray(customModules) ? customModules : [],
@@ -330,16 +349,15 @@ export function publicationsControllerOptions(
       ? unionHome
       : path.resolve(Deno.cwd(), unionHome),
     htmlDestHome: path.join(projectHomeAbs, "public"), // TODO: make "public" CLI configurable
-    observabilitySrcHome: path.join(
-      projectHomeAbs,
-      "static",
-      observabilityPath,
-    ),
-    observabilityHtmlDestHome: path.join(
-      projectHomeAbs,
-      "public",
-      observabilityPath,
-    ),
+    observabilitySrcHome: path.isAbsolute(observabilitySrcHome)
+      ? observabilitySrcHome
+      : path.resolve(Deno.cwd(), observabilitySrcHome),
+    observabilityHtmlDestHome: path.isAbsolute(observabilityDestHome)
+      ? observabilityDestHome
+      : path.resolve(Deno.cwd(), observabilityDestHome),
+    observabilityPromMetricsFile: path.isAbsolute(observabilityPromMetricsFile)
+      ? observabilityPromMetricsFile
+      : path.resolve(Deno.cwd(), observabilityPromMetricsFile),
     hooksGlobs,
     targets,
     schedule,
@@ -502,6 +520,8 @@ export class PublicationsControllerPluginsManager<
       hookHome,
       this.pco.observabilityHtmlDestHome,
     );
+    result[`${envVarsPrefix}OBSERVABILITY_PROMETHEUS_METRICS_FILE_ABS`] =
+      this.pco.observabilityPromMetricsFile;
     result[`${envVarsPrefix}OPTIONS_JSON`] = JSON.stringify(
       this.cli.cliArgs,
     );
