@@ -7,14 +7,17 @@
  * site/publication.
  */
 
+import { defaultTraverseOptions } from "https://raw.githubusercontent.com/shah/ts-safe-http-client/v0.8.2/core/traverse.ts";
 import {
   artfPersist as ap,
   artfPersistDoc as apd,
   colors,
   contextMgr as cm,
+  dateTime as dt,
   docopt,
   extend as ex,
   fs,
+  govnSvcMetrics as gsm,
   govnSvcVersion as gsv,
   inflect,
   inspect as insp,
@@ -248,7 +251,29 @@ export interface CliArgsSupplier {
   readonly cliArgs: docopt.DocOptions;
 }
 
+export interface ControllerExecInfoMetricLabels {
+  readonly initOn: Date;
+  readonly finalizeOn: Date;
+  readonly host: string;
+  readonly txId: string;
+  readonly command?: string;
+  readonly schedule?: string;
+  readonly targets?: string;
+}
+
+export class PublicationMetrics extends gsm.TypicalMetrics {
+  readonly controllerExec = this.infoMetric<ControllerExecInfoMetricLabels>(
+    "controller_exec",
+    "Controller execution tracker",
+  );
+
+  constructor() {
+    super("nets_pubctl_");
+  }
+}
+
 export interface PublicationsControllerOptions {
+  readonly metrics: PublicationMetrics;
   readonly projectHome: string;
   readonly unionHome: string;
   readonly htmlDestHome: string;
@@ -343,6 +368,7 @@ export function publicationsControllerOptions(
     ? projectHome
     : path.resolve(Deno.cwd(), projectHome);
   return {
+    metrics: new PublicationMetrics(),
     projectHome: projectHomeAbs,
     customModules: Array.isArray(customModules) ? customModules : [],
     unionHome: path.isAbsolute(unionHome)
@@ -544,6 +570,7 @@ export class PublicationsController
     p.PublicationsSupplier,
     p.PublicationModulesSupplier,
     ex.PluginExecutive {
+  readonly initOn = new Date();
   readonly publications: Record<string, p.Publication> = {};
   readonly publModules: p.PublicationModule[] = [];
   readonly pluginsMgr: PublicationsControllerPluginsManager<
@@ -562,6 +589,32 @@ export class PublicationsController
 
   async initController(): Promise<void> {
     await this.pluginsMgr.init();
+  }
+
+  async finalizeController<C extends PublicationsController>(
+    handledBy?: PublicationsControllerCommandHandler<C>,
+  ): Promise<void> {
+    this.pco.metrics.record(this.pco.metrics.controllerExec.instance({
+      initOn: this.initOn,
+      finalizeOn: new Date(),
+      txId: this.pco.transactionID,
+      host: this.pco.buildHostID,
+      schedule: this.pco.schedule,
+      targets: this.pco.targets.length > 0
+        ? this.pco.targets.join(",")
+        : undefined,
+    }));
+    await this.persistMetrics();
+  }
+
+  async persistMetrics(): Promise<void> {
+    await this.pco.metrics.persist(
+      this.pco.observabilityPromMetricsFile,
+      {
+        append: true,
+        ...gsm.prometheusDialect(),
+      },
+    );
   }
 
   publication(
@@ -1069,15 +1122,18 @@ export async function CLI<
       ? prepareController(caller, cliArgs, pchOptions)
       : new PublicationsController({ cliArgs }, pchOptions);
     await context.initController();
-    let handled: true | void;
+    let handledBy: PublicationsControllerCommandHandler<C> | undefined;
     for (const handler of commonHandlers) {
-      handled = await handler(context);
-      if (handled) break;
+      if (await handler(context)) {
+        handledBy = handler;
+        break;
+      }
     }
-    if (!handled) {
+    if (!handledBy) {
       console.error("Unable to handle validly parsed docoptSpec:");
       console.dir(cliArgs);
     }
+    await context.finalizeController(handledBy);
   } catch (e) {
     console.error(e.message);
   }
