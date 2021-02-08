@@ -682,6 +682,37 @@ export class PublicationsController
         }: ${this.pco.metrics.instances.length} instances, ${exported.length} lines`,
       );
     }
+    if (
+      fs.existsSync(this.pco.observabilityPromMetricsFile) &&
+      fs.existsSync(this.pco.observabilityHtmlDestHome)
+    ) {
+      await Deno.copyFile(
+        this.pco.observabilityPromMetricsFile,
+        path.join(
+          this.pco.observabilityHtmlDestHome,
+          path.basename(this.pco.observabilityPromMetricsFile),
+        ),
+      );
+      if (this.pco.isVerbose) {
+        console.log(
+          `Copied ${
+            colors.blue(
+              path.relative(
+                this.pco.projectHome,
+                this.pco.observabilityPromMetricsFile,
+              ),
+            )
+          } to ${
+            colors.yellow(
+              path.relative(
+                this.pco.projectHome,
+                this.pco.observabilityHtmlDestHome,
+              ),
+            )
+          }`,
+        );
+      }
+    }
   }
 
   publication(
@@ -1073,23 +1104,11 @@ export class PublicationsController
         this.pco.observabilityHugoTemplateMetricsCsvFile,
         csvRows.join("\n"),
       );
-      await Deno.copyFile(
-        this.pco.observabilityHugoTemplateMetricsCsvFile,
-        path.join(
-          this.pco.observabilityHtmlDestHome,
-          path.basename(this.pco.observabilityHugoTemplateMetricsCsvFile),
-        ),
-      );
       if (this.pco.isVerbose) {
         console.log(
           `Stored Hugo build template metrics in ${
             colors.yellow(this.pco.observabilityHugoTemplateMetricsCsvFile)
           }: ${csvRows.length} rows`,
-        );
-        console.log(
-          `Copied Hugo build template metrics ${
-            colors.yellow(this.pco.observabilityHugoTemplateMetricsCsvFile)
-          } to ${this.pco.observabilityHtmlDestHome}`,
         );
       }
     }
@@ -1107,28 +1126,47 @@ export class PublicationsController
       this.pco.observabilityHealthFile,
       JSON.stringify(healthy, undefined, "  "),
     );
-    await Deno.copyFile(
-      this.pco.observabilityHealthFile,
-      path.join(
-        this.pco.htmlDestHome,
-        path.basename(this.pco.observabilityHealthFile),
-      ),
-    );
     if (this.pco.isVerbose) {
       console.log(
         `Stored final healthy service status in ${
           colors.yellow(this.pco.observabilityHealthFile)
         }`,
       );
-      console.log(
-        `Copied healthy service status ${
-          colors.yellow(this.pco.observabilityHealthFile)
-        } to ${this.pco.htmlDestHome}`,
-      );
     }
-    return await this.executeHooks({
+    const hooksResult = await this.executeHooks({
       proxyCmd: HookLifecycleStep.BUILD_FINALIZE,
     });
+    for (
+      const copy of [{
+        src: this.pco.observabilityHealthFile,
+        dest: path.join(
+          this.pco.htmlDestHome,
+          path.basename(this.pco.observabilityHealthFile),
+        ),
+      }, {
+        src: this.pco.observabilityHugoTemplateMetricsCsvFile,
+        dest: path.join(
+          this.pco.observabilityHtmlDestHome,
+          path.basename(this.pco.observabilityHugoTemplateMetricsCsvFile),
+        ),
+      }]
+    ) {
+      if (fs.existsSync(copy.src) && fs.existsSync(path.dirname(copy.dest))) {
+        await Deno.copyFile(copy.src, copy.dest);
+        if (this.pco.isVerbose) {
+          console.log(
+            `Copied ${
+              colors.blue(path.relative(this.pco.projectHome, copy.src))
+            } to ${
+              colors.yellow(
+                path.relative(this.pco.projectHome, path.dirname(copy.dest)),
+              )
+            }`,
+          );
+        }
+      }
+    }
+    return hooksResult;
   }
 
   async inspect() {
