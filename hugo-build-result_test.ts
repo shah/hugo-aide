@@ -17,7 +17,7 @@ Deno.test(`Hugo build results parser`, () => {
     "hugo-build-results_test.golden",
   );
   ta.assert(hbr.isValidHugoBuildResults(buildResults));
-  ta.assertEquals(buildResults.templateMetrics.length, 202);
+  ta.assertEquals(buildResults.parsedTemplateMetrics.length, 202);
 });
 
 Deno.test(`Hugo duration parser`, () => {
