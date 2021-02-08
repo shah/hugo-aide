@@ -997,6 +997,7 @@ export class PublicationsController
     this.execInfoMetricInstanceCommand(HookLifecycleStep.BUILD_FINALIZE);
     const hugoBuildResults = hbr.parseHugoBuildResults(
       this.pco.observabilityHugoBuildResultsFile,
+      this.pco.observabilityMetricNamePrefix,
     );
     if (hbr.isValidHugoBuildResults(hugoBuildResults)) {
       const hbrMetrics = hugoBuildResults.buildMetrics;

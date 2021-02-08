@@ -108,6 +108,7 @@ export function isValidHugoBuildResults(
 
 export function parseHugoBuildResults(
   resultFileName: string,
+  openMetricsNamePrefix: string,
 ): HugoBuildResults | string {
   if (!fs.existsSync(resultFileName)) {
     return `Unable to parse Hugo Build Results: file not found`;
@@ -173,7 +174,7 @@ export function parseHugoBuildResults(
         }
         return parsedTemplateMetricsCSV;
       },
-      buildMetrics: new HugoBuildMetrics(),
+      buildMetrics: new HugoBuildMetrics(openMetricsNamePrefix),
     };
   }
   return `Unable to parse Hugo Build Results: build time match for ${buildTimeRegEx} not found`;

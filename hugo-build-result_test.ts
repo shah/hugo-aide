@@ -4,6 +4,7 @@ import * as hbr from "./hugo-build-results.ts";
 Deno.test(`Hugo build results parser error: file not found`, () => {
   const buildResults = hbr.parseHugoBuildResults(
     "hugo-build-bad-filename.golden",
+    "nets_pubctl_",
   );
   ta.assert(!hbr.isValidHugoBuildResults(buildResults));
   ta.assertEquals(
@@ -15,6 +16,7 @@ Deno.test(`Hugo build results parser error: file not found`, () => {
 Deno.test(`Hugo build results parser`, () => {
   const buildResults = hbr.parseHugoBuildResults(
     "hugo-build-results_test.golden",
+    "nets_pubctl_",
   );
   ta.assert(hbr.isValidHugoBuildResults(buildResults));
   ta.assertEquals(buildResults.parsedTemplateMetrics.length, 202);
