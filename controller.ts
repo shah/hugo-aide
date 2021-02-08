@@ -1049,8 +1049,8 @@ export class PublicationsController
             { ...labels, durationText: tm.maximumDurationText },
           ),
         );
-        this.pco.metrics.merge(hbrMetrics);
       }
+      this.pco.metrics.merge(hbrMetrics);
       const csvRows = hugoBuildResults.parsedTemplateMetricsCSV({
         names: [
           "TxID",
