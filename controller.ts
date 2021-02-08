@@ -1072,13 +1072,12 @@ export class PublicationsController
         this.pco.observabilityHugoTemplateMetricsCsvFile,
         csvRows.join("\n"),
       );
-      const destHtmlFileName = path.join(
-        this.pco.observabilityHtmlDestHome,
-        path.basename(this.pco.observabilityHugoTemplateMetricsCsvFile),
-      );
       await Deno.copyFile(
         this.pco.observabilityHugoTemplateMetricsCsvFile,
-        destHtmlFileName,
+        path.join(
+          this.pco.observabilityHtmlDestHome,
+          path.basename(this.pco.observabilityHugoTemplateMetricsCsvFile),
+        ),
       );
       if (this.pco.isVerbose) {
         console.log(
@@ -1110,7 +1109,7 @@ export class PublicationsController
     await Deno.copyFile(
       this.pco.observabilityHealthFile,
       path.join(
-        this.pco.projectHome,
+        this.pco.htmlDestHome,
         path.basename(this.pco.observabilityHealthFile),
       ),
     );
@@ -1123,7 +1122,7 @@ export class PublicationsController
       console.log(
         `Copied healthy service status ${
           colors.yellow(this.pco.observabilityHealthFile)
-        } to ${this.pco.projectHome}`,
+        } to ${this.pco.htmlDestHome}`,
       );
     }
     return await this.executeHooks({
