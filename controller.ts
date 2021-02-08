@@ -7,7 +7,6 @@
  * site/publication.
  */
 
-import { defaultTraverseOptions } from "https://raw.githubusercontent.com/shah/ts-safe-http-client/v0.8.2/core/traverse.ts";
 import {
   artfPersist as ap,
   artfPersistDoc as apd,
@@ -17,6 +16,7 @@ import {
   docopt,
   extend as ex,
   fs,
+  govnSvcHealth as health,
   govnSvcMetrics as gsm,
   govnSvcVersion as gsv,
   inflect,
@@ -29,6 +29,7 @@ import {
 } from "./deps.ts";
 import * as hugo from "./hugo-config.ts";
 import * as p from "./publication.ts";
+import * as hbr from "./hugo-build-results.ts";
 
 export function determineVersion(importMetaURL: string): Promise<string> {
   return gsv.determineVersionFromRepoTag(
@@ -45,10 +46,13 @@ export interface CommandHandlerCaller {
 }
 
 export function defaultDocoptSpec(caller: CommandHandlerCaller): string {
+  const publ = `--publ=<publ-id> [--module=<module-id>]...`;
   const targetable = "[<target>]...";
   const schedulable = "--schedule=<cronSpec>";
   const paths =
     `[--project=<path>] [--union-home=<path>] [--observability-src-home=<path>] [--observability-dest-home=<path>] [--observability-prom-metrics-file=<file>]`;
+  const hugoResults = `[--observability-hugo-results-file=<file>]`;
+  const healthResults = `[--observability-health-file=<file>]`;
   const hookable = `[--hooks=<glob>]...`;
   const observable = "[--verbose] [--dry-run]";
   const customizable = `[--arg=<name>]... [--argv=<value>]...`;
@@ -60,7 +64,7 @@ Publication Orchestrator ${caller.version}.
 
 Usage:
   pubctl init workspace ${stdArgs}
-  pubctl hugo init ${targetable} --publ=<publ-id> [--module=<module-id>]... [--dest=<dest>] ${transactionID} ${paths} ${hookable} ${observable} ${customizable}
+  pubctl hugo init ${targetable} ${publ} [--dest=<dest>] ${transactionID} ${paths} ${hookable} ${observable} ${customizable}
   pubctl hugo inspect ${targetable} ${transactionID} ${paths} ${hookable} ${customizable}
   pubctl hugo clean ${targetable} ${transactionID} ${paths} ${hookable} ${customizable}
   pubctl observability clean ${targetable} ${transactionID} ${paths} ${hookable} ${observable} ${customizable}
@@ -68,7 +72,8 @@ Usage:
   pubctl validate hooks ${stdArgs}
   pubctl describe ${targetable} ${transactionID} ${paths} ${hookable} ${customizable}
   pubctl inspect (publications | publishable-modules | ${targetable}) ${transactionID} ${paths} ${hookable} ${customizable}
-  pubctl build ${targetable} ${schedulable} ${transactionID} ${paths} ${hookable} ${observable} ${customizable}
+  pubctl build prepare ${targetable} ${publ} ${schedulable} ${transactionID} ${healthResults} ${paths} ${hookable} ${observable} ${customizable}
+  pubctl build finalize ${targetable} ${publ} ${schedulable} ${transactionID} ${healthResults} ${hugoResults} ${paths} ${hookable} ${observable} ${customizable}
   pubctl generate ${targetable} ${schedulable} ${transactionID} ${paths} ${hookable} ${observable} ${customizable}
   pubctl clean ${stdArgs}
   pubctl doctor ${stdArgs}
@@ -83,6 +88,8 @@ Options:
   --observability-src-home=PATH           The path where observability files are prepared during build [default: static/.observability]
   --observability-dest-home=PATH          The path where observability files are copied for publication [default: public/.observability]
   --observability-prom-metrics-file=FILE  The file in the observability src path where the prometheus metrics are stored [default: static/.observability/publication-observability-prometheus-metrics.auto.txt]
+  --observability-hugo-results-file=FILE  The file in the observability src path where the Hugo build output is stored [default: static/.observability/hugo-build-results.auto.txt]
+  --observability-health-file=FILE        The file in the observability src path where the health.json status is stored [default: static/.observability/health.json]
   --publ-id=PUBLICATION                   A publication configuration supplier name [default: sandbox]
   --module=MODULE                         One or more Hugo module identifiers that should be included in the init or configure process
   --schedule=CRONSPEC                     Cron spec for schedule [default: * * * * *]
@@ -113,7 +120,8 @@ export enum HookLifecycleStep {
   DESCRIBE = "describe",
   INSPECT = "inspect",
   GENERATE = "generate",
-  BUILD = "build",
+  BUILD_PREPARE = "build-prepare",
+  BUILD_FINALIZE = "build-finalize",
   CLEAN = "clean",
   UPDATE = "update",
 }
@@ -205,7 +213,8 @@ export function defaultPubCtlHookSync<
     case HookLifecycleStep.HUGO_CLEAN:
     case HookLifecycleStep.DESCRIBE:
     case HookLifecycleStep.GENERATE:
-    case HookLifecycleStep.BUILD:
+    case HookLifecycleStep.BUILD_PREPARE:
+    case HookLifecycleStep.BUILD_FINALIZE:
     case HookLifecycleStep.INSPECT:
     case HookLifecycleStep.CLEAN:
     case HookLifecycleStep.UPDATE:
@@ -252,13 +261,16 @@ export interface CliArgsSupplier {
 }
 
 export interface ControllerExecInfoMetricLabels {
+  // These are known at controller init time
   readonly initOn: Date;
-  readonly finalizeOn: Date;
   readonly host: string;
   readonly txId: string;
-  readonly command?: string;
   readonly schedule?: string;
   readonly targets?: string;
+
+  // These are updated at the end, after finalization
+  finalizeOn?: Date;
+  command?: string;
 }
 
 export class PublicationMetrics extends gsm.TypicalMetrics {
@@ -266,10 +278,6 @@ export class PublicationMetrics extends gsm.TypicalMetrics {
     "controller_exec",
     "Controller execution tracker",
   );
-
-  constructor() {
-    super("nets_pubctl_");
-  }
 }
 
 export interface PublicationsControllerOptions {
@@ -288,7 +296,11 @@ export interface PublicationsControllerOptions {
   readonly customModules: p.PublicationModuleIdentity[];
   readonly observabilitySrcHome: string;
   readonly observabilityPromMetricsFile: string;
+  readonly observabilityMetricNamePrefix: string;
   readonly observabilityHtmlDestHome: string;
+  readonly observabilityHugoBuildResultsFile: string;
+  readonly observabilityHugoTemplateMetricsCsvFile: string;
+  readonly observabilityHealthFile: string;
 }
 
 export function publicationsControllerOptions(
@@ -302,6 +314,8 @@ export function publicationsControllerOptions(
     "--observability-src-home": observabilitySrcPathArg,
     "--observability-dest-home": observabilityDestPathArg,
     "--observability-prom-metrics-file": observabilityPromMetricsFileArg,
+    "--observability-hugo-metrics-file": observabilityHugoBuildResultsFileArg,
+    "--observability-health-file": observabilityHealthFileArg,
     "--hooks": hooksArg,
     "--verbose": verboseArg,
     "--dry-run": dryRunArg,
@@ -328,6 +342,18 @@ export function publicationsControllerOptions(
     : (path.join(
       observabilitySrcHome,
       "publication-observability-prometheus-metrics.auto.txt",
+    ));
+  const observabilityHugoBuildResultsFile = observabilityHugoBuildResultsFileArg
+    ? observabilityHugoBuildResultsFileArg as string
+    : (path.join(
+      observabilitySrcHome,
+      "hugo-build-results.auto.txt",
+    ));
+  const observabilityHealthFile = observabilityHealthFileArg
+    ? observabilityHealthFileArg as string
+    : (path.join(
+      observabilitySrcHome,
+      "health.json",
     ));
   const hooksGlobs = hooksArg as string[];
   const targets = targetsArg as string[];
@@ -364,11 +390,12 @@ export function publicationsControllerOptions(
     }
   }
 
+  const metricNamePrefix = "nets_pubctl_"; // TODO: make this CLI configurable
   const projectHomeAbs = path.isAbsolute(projectHome)
     ? projectHome
     : path.resolve(Deno.cwd(), projectHome);
   return {
-    metrics: new PublicationMetrics(),
+    metrics: new PublicationMetrics(metricNamePrefix),
     projectHome: projectHomeAbs,
     customModules: Array.isArray(customModules) ? customModules : [],
     unionHome: path.isAbsolute(unionHome)
@@ -384,6 +411,13 @@ export function publicationsControllerOptions(
     observabilityPromMetricsFile: path.isAbsolute(observabilityPromMetricsFile)
       ? observabilityPromMetricsFile
       : path.resolve(Deno.cwd(), observabilityPromMetricsFile),
+    observabilityMetricNamePrefix: metricNamePrefix,
+    observabilityHugoBuildResultsFile,
+    observabilityHealthFile,
+    observabilityHugoTemplateMetricsCsvFile: path.join(
+      observabilitySrcHome,
+      "publication-observability-hugo-template-metrics.auto.csv",
+    ),
     hooksGlobs,
     targets,
     schedule,
@@ -548,6 +582,8 @@ export class PublicationsControllerPluginsManager<
     );
     result[`${envVarsPrefix}OBSERVABILITY_PROMETHEUS_METRICS_FILE_ABS`] =
       this.pco.observabilityPromMetricsFile;
+    result[`${envVarsPrefix}OBSERVABILITY_METRIC_NAME_PREFIX`] =
+      this.pco.observabilityMetricNamePrefix;
     result[`${envVarsPrefix}OPTIONS_JSON`] = JSON.stringify(
       this.cli.cliArgs,
     );
@@ -570,7 +606,10 @@ export class PublicationsController
     p.PublicationsSupplier,
     p.PublicationModulesSupplier,
     ex.PluginExecutive {
-  readonly initOn = new Date();
+  readonly execInfoInstance: gsm.LabeledMetricInstance<
+    gsm.InfoMetric<ControllerExecInfoMetricLabels>,
+    ControllerExecInfoMetricLabels
+  >;
   readonly publications: Record<string, p.Publication> = {};
   readonly publModules: p.PublicationModule[] = [];
   readonly pluginsMgr: PublicationsControllerPluginsManager<
@@ -581,6 +620,15 @@ export class PublicationsController
     readonly cli: CliArgsSupplier,
     readonly pco: PublicationsControllerOptions,
   ) {
+    this.execInfoInstance = this.pco.metrics.controllerExec.instance({
+      initOn: new Date(),
+      txId: this.pco.transactionID,
+      host: this.pco.buildHostID,
+      schedule: this.pco.schedule,
+      targets: this.pco.targets.length > 0
+        ? this.pco.targets.join(",")
+        : undefined,
+    });
     this.pluginsMgr = new PublicationsControllerPluginsManager<
       PublicationsControllerOptions,
       PublicationsController
@@ -594,27 +642,46 @@ export class PublicationsController
   async finalizeController<C extends PublicationsController>(
     handledBy?: PublicationsControllerCommandHandler<C>,
   ): Promise<void> {
-    this.pco.metrics.record(this.pco.metrics.controllerExec.instance({
-      initOn: this.initOn,
-      finalizeOn: new Date(),
-      txId: this.pco.transactionID,
-      host: this.pco.buildHostID,
-      schedule: this.pco.schedule,
-      targets: this.pco.targets.length > 0
-        ? this.pco.targets.join(",")
-        : undefined,
-    }));
+    // if we had a command working tracking, then record the metrics
+    if (this.execInfoInstance.labels.object.command) {
+      this.execInfoInstance.labels.object.finalizeOn = new Date();
+      this.pco.metrics.record(this.execInfoInstance);
+    }
     await this.persistMetrics();
   }
 
+  execInfoMetricInstanceCommand(command: string): void {
+    if (this.execInfoInstance.labels.object.command) {
+      this.execInfoInstance.labels.object.command += " " + command;
+    } else {
+      this.execInfoInstance.labels.object.command = command;
+    }
+  }
+
   async persistMetrics(): Promise<void> {
-    await this.pco.metrics.persist(
-      this.pco.observabilityPromMetricsFile,
-      {
-        append: true,
-        ...gsm.prometheusDialect(),
-      },
-    );
+    const dialect = gsm.prometheusDialect();
+    const exported = dialect.export(this.pco.metrics.instances);
+    if (exported.length > 0) {
+      await Deno.writeTextFile(
+        this.pco.observabilityPromMetricsFile,
+        exported.join("\n") + "\n",
+        {
+          append: true,
+        },
+      );
+    }
+    if (this.pco.isVerbose) {
+      console.log(
+        `Metrics appended to ${
+          colors.yellow(
+            path.relative(
+              this.pco.projectHome,
+              this.pco.observabilityPromMetricsFile,
+            ),
+          )
+        }: ${this.pco.metrics.instances.length} instances, ${exported.length} lines`,
+      );
+    }
   }
 
   publication(
@@ -631,6 +698,7 @@ export class PublicationsController
     publ: hugo.HugoPublication<any>,
     destPath: string,
   ): Promise<boolean> {
+    this.execInfoMetricInstanceCommand(HookLifecycleStep.HUGO_INIT);
     this.hugoClean();
     const hugoModInit = this.reportShellCmd(
       `hugo mod init ${publ.hugoModuleName} --verbose`,
@@ -658,11 +726,13 @@ export class PublicationsController
   }
 
   async hugoInspect(): Promise<boolean> {
+    this.execInfoMetricInstanceCommand(HookLifecycleStep.HUGO_INSPECT);
     await this.executeHooks({ proxyCmd: HookLifecycleStep.HUGO_INSPECT });
     return true;
   }
 
   async hugoClean(): Promise<boolean> {
+    this.execInfoMetricInstanceCommand(HookLifecycleStep.HUGO_CLEAN);
     await this.clean();
     await this.executeHooks({ proxyCmd: HookLifecycleStep.HUGO_CLEAN });
     const hugoModClean = this.reportShellCmd(`hugox mod clean --all`);
@@ -676,8 +746,25 @@ export class PublicationsController
   }
 
   async observabilityClean(): Promise<boolean> {
+    // Don't run this.execInfoMetricInstanceCommand(HookLifecycleStep.OBSERVABILITY_CLEAN)
+    // because it will generate this.pco.observabilityPromMetricsFile, which needs to be cleaned
     await this.executeHooks({
       proxyCmd: HookLifecycleStep.OBSERVABILITY_CLEAN,
+    });
+    [
+      this.pco.observabilityHugoBuildResultsFile,
+      this.pco.observabilityHealthFile,
+      this.pco.observabilityPromMetricsFile,
+      this.pco.observabilityHugoTemplateMetricsCsvFile,
+    ].forEach((f) => {
+      if (fs.existsSync(f)) {
+        if (this.pco.isDryRun) {
+          console.log("rm -f", colors.red(f));
+        } else {
+          Deno.removeSync(f, { recursive: true });
+          if (this.pco.isVerbose) console.log(colors.red(`deleted ${f}`));
+        }
+      }
     });
     return true;
   }
@@ -811,11 +898,237 @@ export class PublicationsController
   }
 
   async generate() {
+    this.execInfoMetricInstanceCommand(HookLifecycleStep.GENERATE);
     return await this.executeHooks({ proxyCmd: HookLifecycleStep.GENERATE });
   }
 
-  async build() {
-    return await this.executeHooks({ proxyCmd: HookLifecycleStep.BUILD });
+  serviceHealthComponents(
+    publ: p.Publication,
+    buildResults?: hbr.HugoBuildResults | string,
+  ): health.ServiceHealthComponents {
+    const publComponents: health.ServiceHealthComponentStatus[] = [];
+    const hooks: health.ServiceHealthComponentStatus[] = [];
+    const details: Record<string, health.ServiceHealthComponentDetails> = {
+      [`publ:${publ.identity}`]: publComponents,
+      [`hooks`]: hooks,
+    };
+    if (buildResults) {
+      if (hbr.isValidHugoBuildResults(buildResults)) {
+        const buildStatus = health.healthyComponent({
+          componentType: "component",
+          componentId: `hugo-build-time:${publ.identity}`,
+          metricName: "build time",
+          metricUnit: "ms",
+          metricValue: buildResults.buildTimeMS,
+          links: { "src": this.pco.observabilityHugoBuildResultsFile },
+          time: buildResults.resultFileInfo.mtime || new Date(),
+        });
+        publComponents.push(buildStatus);
+        publComponents.push({
+          ...buildStatus,
+          metricUnit: "minutes",
+          metricValue: buildResults.buildTimeMS / 1000 / 60,
+        });
+      } else {
+        publComponents.push(health.unhealthyComponent("warn", {
+          componentType: "component",
+          componentId: `hugo-build-results:${publ.identity}`,
+          links: { "src": this.pco.observabilityHugoBuildResultsFile },
+          time: new Date(),
+          output: buildResults,
+        }));
+      }
+    }
+    if (hugo.isHugoPublication(publ)) {
+      const hcs = publ.hugoConfigSupplier(this);
+      const modules = hcs.hugoConfigModules();
+      for (const hm of modules) {
+        publComponents.push(health.healthyComponent({
+          componentType: "component",
+          componentId: `module:${hm.identity}`,
+          links: {}, // TODO show source locations of module imports
+          time: new Date(),
+        }));
+      }
+    }
+    for (const hook of this.pluginsMgr.plugins) {
+      hooks.push(health.healthyComponent({
+        componentType: "component",
+        componentId: `hook:${hook.nature.identity}`,
+        links: {
+          "src": hook.source.systemID,
+        },
+        time: new Date(),
+      }));
+    }
+    return {
+      details: details,
+    };
+  }
+
+  async buildPrepare(publ: p.Publication) {
+    this.execInfoMetricInstanceCommand(HookLifecycleStep.BUILD_PREPARE);
+    const unhealthy = health.unhealthyService("fail", {
+      serviceID: import.meta.url,
+      releaseID: this.pco.transactionID,
+      description: "build prepare",
+      output:
+        "`build prepare` must be followed by `build finalize` which checks results",
+      details: this.serviceHealthComponents(publ).details,
+      version: await determineVersion(import.meta.url),
+    });
+    Deno.writeTextFileSync(
+      this.pco.observabilityHealthFile,
+      JSON.stringify(unhealthy, undefined, "  "),
+    );
+    if (this.pco.isVerbose) {
+      console.log(
+        `Stored initial unhealth service status in ${
+          colors.yellow(this.pco.observabilityHealthFile)
+        }`,
+      );
+    }
+    return await this.executeHooks({
+      proxyCmd: HookLifecycleStep.BUILD_PREPARE,
+    });
+  }
+
+  async buildFinalize(publ: p.Publication) {
+    this.execInfoMetricInstanceCommand(HookLifecycleStep.BUILD_FINALIZE);
+    const hugoBuildResults = hbr.parseHugoBuildResults(
+      this.pco.observabilityHugoBuildResultsFile,
+    );
+    if (hbr.isValidHugoBuildResults(hugoBuildResults)) {
+      const hbrMetrics = hugoBuildResults.buildMetrics;
+      const publLabels = {
+        host: this.pco.buildHostID,
+        txId: this.pco.transactionID,
+        publ: publ.identity,
+        src: path.relative(
+          this.pco.projectHome,
+          this.pco.observabilityHugoBuildResultsFile,
+        ),
+        srcMTime: hugoBuildResults.resultFileInfo.mtime || new Date(),
+      };
+      hbrMetrics.record(
+        hbrMetrics.hugoBuildTotalTime.instance(
+          hugoBuildResults.buildTimeMS,
+          publLabels,
+        ),
+      );
+      for (const tm of hugoBuildResults.parsedTemplateMetrics) {
+        const labels: hbr.HugoBuildResultTemplateMetricLabels = {
+          template: tm.templateName,
+          ...publLabels,
+        };
+        hbrMetrics.record(
+          hbrMetrics.hugoTemplateMetricCount.instance(tm.count, labels),
+        );
+        hbrMetrics.record(
+          hbrMetrics.hugoTemplateMetricCachePotential.instance(
+            tm.cachePotential,
+            labels,
+          ),
+        );
+        hbrMetrics.record(
+          hbrMetrics.hugoTemplateMetricAverageDuration.instance(
+            tm.averageDuration,
+            { ...labels, durationText: tm.averageDurationText },
+          ),
+        );
+        hbrMetrics.record(
+          hbrMetrics.hugoTemplateMetricCumulativeDuration.instance(
+            tm.cumulativeDuration,
+            { ...labels, durationText: tm.cumulativeDurationText },
+          ),
+        );
+        hbrMetrics.record(
+          hbrMetrics.hugoTemplateMetricMaximumDuration.instance(
+            tm.maximumDuration,
+            { ...labels, durationText: tm.maximumDurationText },
+          ),
+        );
+        this.pco.metrics.merge(hbrMetrics);
+      }
+      const csvRows = hugoBuildResults.parsedTemplateMetricsCSV({
+        names: [
+          "TxID",
+          "Host",
+          "Publication",
+          "Source File",
+          "Source Date",
+          "Build Time Milliseconds",
+        ],
+        values: [
+          this.pco.transactionID,
+          this.pco.buildHostID,
+          publ.identity,
+          publLabels.src,
+          JSON.stringify(publLabels.srcMTime),
+          JSON.stringify(hugoBuildResults.buildTimeMS),
+        ],
+      });
+      await Deno.writeTextFile(
+        this.pco.observabilityHugoTemplateMetricsCsvFile,
+        csvRows.join("\n"),
+      );
+      const destHtmlFileName = path.join(
+        this.pco.observabilityHtmlDestHome,
+        path.basename(this.pco.observabilityHugoTemplateMetricsCsvFile),
+      );
+      await Deno.copyFile(
+        this.pco.observabilityHugoTemplateMetricsCsvFile,
+        destHtmlFileName,
+      );
+      if (this.pco.isVerbose) {
+        console.log(
+          `Stored Hugo build template metrics in ${
+            colors.yellow(this.pco.observabilityHugoTemplateMetricsCsvFile)
+          }: ${csvRows.length} rows`,
+        );
+        console.log(
+          `Copied Hugo build template metrics ${
+            colors.yellow(this.pco.observabilityHugoTemplateMetricsCsvFile)
+          } to ${this.pco.observabilityHtmlDestHome}`,
+        );
+      }
+    }
+    const healthy = health.healthyService({
+      serviceID: import.meta.url,
+      releaseID: this.pco.transactionID,
+      description: "build finalize",
+      details: this.serviceHealthComponents(
+        publ,
+        hugoBuildResults,
+      ).details,
+      version: await determineVersion(import.meta.url),
+    });
+    Deno.writeTextFileSync(
+      this.pco.observabilityHealthFile,
+      JSON.stringify(healthy, undefined, "  "),
+    );
+    await Deno.copyFile(
+      this.pco.observabilityHealthFile,
+      path.join(
+        this.pco.projectHome,
+        path.basename(this.pco.observabilityHealthFile),
+      ),
+    );
+    if (this.pco.isVerbose) {
+      console.log(
+        `Stored final healthy service status in ${
+          colors.yellow(this.pco.observabilityHealthFile)
+        }`,
+      );
+      console.log(
+        `Copied healthy service status ${
+          colors.yellow(this.pco.observabilityHealthFile)
+        } to ${this.pco.projectHome}`,
+      );
+    }
+    return await this.executeHooks({
+      proxyCmd: HookLifecycleStep.BUILD_FINALIZE,
+    });
   }
 
   async inspect() {
@@ -851,6 +1164,7 @@ export class PublicationsController
   }
 
   async clean() {
+    this.execInfoMetricInstanceCommand(HookLifecycleStep.CLEAN);
     await this.executeHooks({ proxyCmd: HookLifecycleStep.CLEAN });
     ["go.sum", "public", "resources"].forEach((f) => {
       if (fs.existsSync(f)) {
@@ -870,6 +1184,7 @@ export class PublicationsController
    * library to be present in the PATH.
    */
   async update() {
+    this.execInfoMetricInstanceCommand(HookLifecycleStep.UPDATE);
     const denoModules = this.pluginsMgr.plugins.filter((p) => {
       return ex.isDenoModulePlugin(p) &&
           ex.fs.isFileSystemPluginSource(p.source)
@@ -1026,10 +1341,36 @@ export async function generateHandler(
 export async function buildHandler(
   ctx: PublicationsController,
 ): Promise<true | void> {
-  const { "build": build } = ctx.cli.cliArgs;
-  if (build) {
-    await ctx.build();
-    return true;
+  const {
+    "build": build,
+    "prepare": prepare,
+    "finalize": finalize,
+    "--publ": publID,
+    "--module": customModules,
+  } = ctx.cli.cliArgs;
+  if (build && publID) {
+    const identity = publID.toString();
+    const publ = ctx.publication(
+      identity,
+      Array.isArray(customModules)
+        ? (customModules.length > 0 ? customModules : undefined)
+        : undefined,
+    );
+    if (publ) {
+      if (prepare) {
+        await ctx.buildPrepare(publ);
+        return true;
+      } else if (finalize) {
+        await ctx.buildFinalize(publ);
+        return true;
+      }
+    } else {
+      console.error(colors.red(
+        `unable to build publication ID '${
+          colors.yellow(identity)
+        }': no definition found`,
+      ));
+    }
   }
 }
 

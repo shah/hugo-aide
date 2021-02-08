@@ -88,15 +88,16 @@ export function publishScriptArtifact(
   mta.appendText(
     hc,
     `PUBCTL_TXID=$(curl --silent https://www.uuidgenerator.net/api/version4)
+HUGO_BUILD_RESULTS_FILE="${observabilitySrcHomeRel}/${buildResultsFile}"
 ./pubctl.ts hugo clean --tx-id="$PUBCTL_TXID"
 ./pubctl.ts generate --schedule="@publish" --tx-id="$PUBCTL_TXID" --verbose
 ./pubctl.ts hugo init --publ=${hc.command.publ.identity} --tx-id="$PUBCTL_TXID" --verbose
-./pubctl.ts build prepare --schedule="@publish" --tx-id="$PUBCTL_TXID" --verbose
+./pubctl.ts build prepare --publ=${hc.command.publ.identity} --schedule="@publish" --tx-id="$PUBCTL_TXID" --verbose
 mkdir -p ${observabilitySrcHomeRel}
-hugo --config ${hugoConfig.hugoConfigFileName} --templateMetrics --templateMetricsHints > ${observabilitySrcHomeRel}/${buildResultsFile}
-./pubctl.ts build finalize --schedule="@publish" --tx-id="$PUBCTL_TXID" --verbose
+hugo --config ${hugoConfig.hugoConfigFileName} --templateMetrics --templateMetricsHints > "$HUGO_BUILD_RESULTS_FILE"
+./pubctl.ts build finalize --publ=${hc.command.publ.identity} --schedule="@publish" --tx-id="$PUBCTL_TXID" --observability-hugo-results-file="$HUGO_BUILD_RESULTS_FILE" --verbose
 mkdir -p ${observabilityHtmlDestHomeRel}
-cp ${observabilitySrcHomeRel}/${buildResultsFile} ${observabilityHtmlDestHomeRel}
+cp "$HUGO_BUILD_RESULTS_FILE" ${observabilityHtmlDestHomeRel}
 echo "Hugo build results in ${observabilityHtmlDestHomeRel}/${buildResultsFile}"
 `,
   );
@@ -128,6 +129,7 @@ export function experimentScriptArtifact(
   mta.appendText(
     hc,
     `PUBCTL_TXID=$(curl --silent https://www.uuidgenerator.net/api/version4)
+HUGO_BUILD_RESULTS_FILE="${observabilitySrcHomeRel}/${buildResultsFile}"
 SERVER=\${1:-}
 if [ -z "$SERVER" ]; then
     echo "Expecting 'hugo', 'hugo-regen', 'file', or 'file-regen' as first parameter."
@@ -187,15 +189,15 @@ case $SERVER in
 
     file)
       regenerate
-      ./pubctl.ts build prepare --schedule="@publish" --tx-id="$PUBCTL_TXID" --verbose
+      ./pubctl.ts build prepare --publ=${hc.command.publ.identity} --schedule="@publish" --tx-id="$PUBCTL_TXID" --verbose
       mkdir -p ${observabilitySrcHomeRel}
-      hugo --config ${hugoConfig.hugoConfigFileName} --templateMetrics --templateMetricsHints > ${observabilitySrcHomeRel}/${buildResultsFile}
-      ./pubctl.ts build finalize --schedule="@publish" --tx-id="$PUBCTL_TXID" --verbose
+      hugo --config ${hugoConfig.hugoConfigFileName} --templateMetrics --templateMetricsHints > "$HUGO_BUILD_RESULTS_FILE"
+      ./pubctl.ts build finalize --publ=${hc.command.publ.identity} --schedule="@publish" --tx-id="$PUBCTL_TXID" --observability-hugo-results-file="$HUGO_BUILD_RESULTS_FILE" --verbose
       mkdir -p ${observabilityHtmlDestHomeRel}
-      cp ${observabilitySrcHomeRel}/${buildResultsFile} ${observabilityHtmlDestHomeRel}
+      cp "$HUGO_BUILD_RESULTS_FILE" ${observabilityHtmlDestHomeRel}
       echo "Hugo build results in ${observabilityHtmlDestHomeRel}/${buildResultsFile}"
       echo "Serving files in '${htmlDestHomeRel}'"
-      deno run -A --unstable https://deno.land/std@0.84.0/http/file_server.ts ${htmlDestHomeRel} --port $PORT --host localhost
+      deno run -A --unstable https://deno.land/std@0.86.0/http/file_server.ts ${htmlDestHomeRel} --port $PORT --host localhost
     ;;
 
     *)
