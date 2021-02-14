@@ -12,7 +12,6 @@ import {
   artfPersistDoc as apd,
   colors,
   contextMgr as cm,
-  dateTime as dt,
   docopt,
   extend as ex,
   fs,
@@ -27,9 +26,9 @@ import {
   uuid,
   valueMgr as vm,
 } from "./deps.ts";
+import * as hbr from "./hugo-build-results.ts";
 import * as hugo from "./hugo-config.ts";
 import * as p from "./publication.ts";
-import * as hbr from "./hugo-build-results.ts";
 
 export function determineVersion(importMetaURL: string): Promise<string> {
   return gsv.determineVersionFromRepoTag(
@@ -265,7 +264,7 @@ export interface ControllerExecInfoMetricLabels {
   readonly initOn: Date;
   readonly host: string;
   readonly txId: string;
-  readonly schedule?: string;
+  readonly schedule?: p.CronSpec;
   readonly targets?: string;
 
   // These are updated at the end, after finalization
@@ -288,7 +287,7 @@ export interface PublicationsControllerOptions {
   readonly hooksGlobs: string[];
   readonly targets: string[];
   readonly arguments: Record<string, string>;
-  readonly schedule?: string;
+  readonly schedule?: p.CronSpec;
   readonly transactionID: string;
   readonly isVerbose: boolean;
   readonly isDryRun: boolean;
@@ -601,6 +600,16 @@ export class PublicationsControllerPluginsManager<
   }
 }
 
+// deno-lint-ignore no-empty-interface
+export interface PublicationModuleContentAssembler
+  extends p.PublicationModuleContentOrchestrator {
+}
+
+// deno-lint-ignore no-empty-interface
+export interface PublicationModuleContentGenerator
+  extends p.PublicationModuleContentOrchestrator {
+}
+
 export class PublicationsController
   implements
     p.PublicationsSupplier,
@@ -716,7 +725,7 @@ export class PublicationsController
   }
 
   publication(
-    publ: p.PublicationIdentity,
+    publ: p.Identity,
     customModules?: p.PublicationModuleIdentity[],
   ): p.Publication | undefined {
     // customModules are usually handled by their publications but available
@@ -1181,6 +1190,12 @@ export class PublicationsController
     if (publishableModules) {
       this.publModules.forEach((pm) => {
         console.log(colors.green(pm.identity));
+        if (p.isPublicationModuleContentSupplier(pm)) {
+          pm.contentOrchestrators.forEach((co) => {
+            const messages = co.inspect({ pc: this });
+            messages.forEach((m) => console.log("   ", m));
+          });
+        }
       });
       return true;
     }
