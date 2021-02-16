@@ -1,4 +1,5 @@
 import {
+  extend as ex,
   govnSvcMetrics as gsm,
   safety,
   shcGitHub as gh,
@@ -47,27 +48,13 @@ export interface PublicationModuleContentOrchestrator extends Identifiable {
 export interface PublicationModuleContentProducerContext {
 }
 
-// deno-lint-ignore no-empty-interface
-export interface PublicationModuleContentProducerResult {
-}
-
-export interface PublicationModuleContentProducer
+export interface PublicationModuleContentProducer<T extends ex.PluginExecutive>
   extends PublicationModuleContentOrchestrator {
   readonly schedule: (ctx: PublicationModuleContentProducerContext) => CronSpec;
-  readonly recipe: (ctx: PublicationModuleContentProducerContext) => string;
   readonly produce: (
-    ctx: PublicationModuleContentProducerContext,
-  ) => Promise<PublicationModuleContentProducerResult>;
+    ctx: ex.PluginContext<T>,
+  ) => Promise<void | ex.ActionResult<T>>;
 }
-
-export interface PublicationModuleContentOrchestratorsSupplier
-  extends Identifiable {
-  readonly contentOrchestrators: PublicationModuleContentOrchestrator[];
-}
-
-export const isPublicationModuleContentSupplier = safety.typeGuard<
-  PublicationModuleContentOrchestratorsSupplier
->("contentOrchestrators");
 
 // deno-lint-ignore no-empty-interface
 export interface Publication extends Identifiable {

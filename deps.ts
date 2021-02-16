@@ -1,10 +1,10 @@
-export * as dateTime from "https://deno.land/std@0.86.0/datetime/mod.ts";
-export * as encodingTOML from "https://deno.land/std@0.86.0/encoding/toml.ts";
-export * as encodingYAML from "https://deno.land/std@0.86.0/encoding/yaml.ts";
-export * as colors from "https://deno.land/std@0.86.0/fmt/colors.ts";
-export * as fs from "https://deno.land/std@0.86.0/fs/mod.ts";
-export * as path from "https://deno.land/std@0.86.0/path/mod.ts";
-export * as uuid from "https://deno.land/std@0.86.0/uuid/mod.ts";
+export * as dateTime from "https://deno.land/std@0.87.0/datetime/mod.ts";
+export * as encodingTOML from "https://deno.land/std@0.87.0/encoding/toml.ts";
+export * as encodingYAML from "https://deno.land/std@0.87.0/encoding/yaml.ts";
+export * as colors from "https://deno.land/std@0.87.0/fmt/colors.ts";
+export * as fs from "https://deno.land/std@0.87.0/fs/mod.ts";
+export * as path from "https://deno.land/std@0.87.0/path/mod.ts";
+export * as uuid from "https://deno.land/std@0.87.0/uuid/mod.ts";
 export * as docopt from "https://denopkg.com/Eyal-Shalev/docopt.js@v1.0.6/src/docopt.ts";
 export * as govnSvcHealth from "https://denopkg.com/gov-suite/governed-service-helpers@v0.3.15/health.ts";
 export * as govnSvcImport from "https://denopkg.com/gov-suite/governed-service-helpers@v0.3.15/import.ts";
@@ -16,7 +16,7 @@ export * as artfPersistDoc from "https://denopkg.com/shah/artifacts-persistence@
 export * as artfPersist from "https://denopkg.com/shah/artifacts-persistence@v1.2.0/mod.ts";
 export * as contextMgr from "https://denopkg.com/shah/context-manager@v1.0.7/mod.ts";
 export * as inflect from "https://denopkg.com/shah/text-inflect@v1.0.5/mod.ts";
-export * as extend from "https://denopkg.com/shah/ts-extend@v0.3.1/mod.ts";
+export * as extend from "https://denopkg.com/shah/ts-extend@v0.3.2/mod.ts";
 export * as inspectAsset from "https://denopkg.com/shah/ts-inspect@v0.9.1/asset/mod.ts";
 export * as inspect from "https://denopkg.com/shah/ts-inspect@v0.9.1/mod.ts";
 export * as shcGitLab from "https://denopkg.com/shah/ts-safe-http-client@v0.8.2/git/github/mod.ts";

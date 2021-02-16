@@ -610,6 +610,28 @@ export interface PublicationModuleContentGenerator
   extends p.PublicationModuleContentOrchestrator {
 }
 
+export interface PublicationModuleContentOrchestratorsSupplier<
+  PC extends PublicationsController,
+  PM extends p.PublicationModule,
+> extends p.Identifiable {
+  readonly contentOrchestrators: (
+    pc: PC,
+    pm: PM,
+  ) => p.PublicationModuleContentOrchestrator[];
+}
+
+export function isPublicationModuleContentSupplier<
+  PC extends PublicationsController,
+  PM extends p.PublicationModule,
+>(
+  o: unknown,
+): o is PublicationModuleContentOrchestratorsSupplier<PC, PM> {
+  const isPMCS = safety.typeGuard<
+    PublicationModuleContentOrchestratorsSupplier<PC, PM>
+  >("contentOrchestrators");
+  return isPMCS(o);
+}
+
 export class PublicationsController
   implements
     p.PublicationsSupplier,
@@ -1190,8 +1212,8 @@ export class PublicationsController
     if (publishableModules) {
       this.publModules.forEach((pm) => {
         console.log(colors.green(pm.identity));
-        if (p.isPublicationModuleContentSupplier(pm)) {
-          pm.contentOrchestrators.forEach((co) => {
+        if (isPublicationModuleContentSupplier(pm)) {
+          pm.contentOrchestrators(this, pm).forEach((co) => {
             const messages = co.inspect({ pc: this });
             messages.forEach((m) => console.log("   ", m));
           });
