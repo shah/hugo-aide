@@ -28,6 +28,25 @@ export interface UnionableAssets extends Identifiable {
 export type PublicationModuleIdentity = string;
 
 // deno-lint-ignore no-empty-interface
+export interface PublicationModuleOptions {
+}
+
+export interface PublicationModuleOptionsSupplier<
+  O extends PublicationModuleOptions,
+> {
+  readonly publModuleOptions: O;
+}
+
+export function isPublicationModuleOptionsSupplier<
+  O extends PublicationModuleOptions,
+>(o: unknown): o is PublicationModuleOptionsSupplier<O> {
+  const isPMOS = safety.typeGuard<PublicationModuleOptionsSupplier<O>>(
+    "publModuleOptions",
+  );
+  return isPMOS(o);
+}
+
+// deno-lint-ignore no-empty-interface
 export interface PublicationModule extends Identifiable {
 }
 

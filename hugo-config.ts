@@ -8,7 +8,7 @@ import {
 } from "./deps.ts";
 import * as publ from "./publication.ts";
 
-export interface HugoPublicationModule<O = void>
+export interface HugoPublicationModule<O extends publ.PublicationModuleOptions>
   extends publ.PublicationModule {
   readonly mergeHugoModuleImports: (
     options: O,
@@ -157,6 +157,7 @@ export interface Highlight {
   anchorLineNos?: boolean;
   codeFences?: boolean;
   guessSyntax?: boolean;
+  // deno-lint-ignore camelcase
   hl_Lines?: string;
   lineAnchors?: string;
   lineNoStart?: number;

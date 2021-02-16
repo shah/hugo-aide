@@ -610,6 +610,17 @@ export interface PublicationModuleContentGenerator
   extends p.PublicationModuleContentOrchestrator {
 }
 
+export interface PublicationModuleImportOptions {
+  readonly publModuleImportRepoPath: (
+    path: string,
+    relTo?: "project" | string,
+  ) => string;
+}
+
+export const isPublicationModuleImportOptions = safety.typeGuard<
+  PublicationModuleImportOptions
+>("publModuleImportRepoPath");
+
 export interface PublicationModuleContentOrchestratorsSupplier<
   PC extends PublicationsController,
   PM extends p.PublicationModule,
