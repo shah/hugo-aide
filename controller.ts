@@ -1,8 +1,8 @@
 /**
  * `publish.ts` provides common functionality that all `pubctl.ts` CLI
- * utilities use in Hugo static sites. When a command is common to all or 
+ * utilities use in Hugo static sites. When a command is common to all or
  * most Hugo-based publications, it is implemented in this library. When a
- * command is custom to a specific Hugo-based publication then that 
+ * command is custom to a specific Hugo-based publication then that
  * functionality is included in the `pubctl.ts` CLI utility of the specific
  * site/publication.
  */
@@ -241,9 +241,9 @@ export function defaultPubCtlHookSync<
 /**
  * defaultPubCtlHookResultEnhancer should be called by all Deno TypeScript
  * hooks so that we can do centralized "enhancing" of the results of any
- * hook. This allows logging, middleware, and other standard function 
+ * hook. This allows logging, middleware, and other standard function
  * handling capabilities.
- * @param dfmhResult 
+ * @param dfmhResult
  */
 export function defaultPubCtlHookResultEnhancer<
   PC extends PublicationsController,
@@ -1264,9 +1264,9 @@ export class PublicationsController
     });
   }
 
-  /** 
+  /**
    * Update the pubctl.ts that uses this library so that it's using the latest
-   * version(s) of all dependencies. This requires the [udd](https://github.com/hayd/deno-udd) 
+   * version(s) of all dependencies. This requires the [udd](https://github.com/hayd/deno-udd)
    * library to be present in the PATH.
    */
   async update() {

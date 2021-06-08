@@ -5,9 +5,7 @@ export * as colors from "https://deno.land/std@0.93.0/fmt/colors.ts";
 export * as fs from "https://deno.land/std@0.93.0/fs/mod.ts";
 export * as path from "https://deno.land/std@0.93.0/path/mod.ts";
 export * as uuid from "https://deno.land/std@0.93.0/uuid/mod.ts";
-//export * as docopt from "https://denopkg.com/Eyal-Shalev/docopt.js@v1.0.6/src/docopt.ts";
-// TODO: when Eyal-Shalev/docopt.js is upgraded, replace this with latest version:
-export * as docopt from "https://denopkg.com/netspective-studios/docopt-TEMP.js/src/docopt.ts";
+export * as docopt from "https://denopkg.com/Eyal-Shalev/docopt.js@v1.0.7/src/docopt.ts";
 export * as govnSvcHealth from "https://denopkg.com/gov-suite/governed-service-helpers@v0.3.15/health.ts";
 export * as govnSvcImport from "https://denopkg.com/gov-suite/governed-service-helpers@v0.3.15/import.ts";
 export * as govnSvcMetrics from "https://denopkg.com/gov-suite/governed-service-helpers@v0.3.15/metrics.ts";
