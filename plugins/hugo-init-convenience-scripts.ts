@@ -89,13 +89,13 @@ export function publishScriptArtifact(
     hc,
     `PUBCTL_TXID=$(curl --silent https://www.uuidgenerator.net/api/version4)
 HUGO_BUILD_RESULTS_FILE="${observabilitySrcHomeRel}/${buildResultsFile}"
-./pubctl.ts hugo clean --tx-id="$PUBCTL_TXID"
-./pubctl.ts generate --schedule="@publish" --tx-id="$PUBCTL_TXID" --verbose
-./pubctl.ts hugo init --publ=${hc.command.publ.identity} --tx-id="$PUBCTL_TXID" --verbose
-./pubctl.ts build prepare --publ=${hc.command.publ.identity} --schedule="@publish" --tx-id="$PUBCTL_TXID" --verbose
+deno run -A --unstable pubctl.ts hugo clean --tx-id="$PUBCTL_TXID"
+deno run -A --unstable pubctl.ts generate --schedule="@publish" --tx-id="$PUBCTL_TXID" --verbose
+deno run -A --unstable pubctl.ts hugo init --publ=${hc.command.publ.identity} --tx-id="$PUBCTL_TXID" --verbose
+deno run -A --unstable pubctl.ts build prepare --publ=${hc.command.publ.identity} --schedule="@publish" --tx-id="$PUBCTL_TXID" --verbose
 mkdir -p ${observabilitySrcHomeRel}
 hugo --config ${hugoConfig.hugoConfigFileName} --templateMetrics --templateMetricsHints > "$HUGO_BUILD_RESULTS_FILE"
-./pubctl.ts build finalize --publ=${hc.command.publ.identity} --schedule="@publish" --tx-id="$PUBCTL_TXID" --observability-hugo-results-file="$HUGO_BUILD_RESULTS_FILE" --verbose
+deno run -A --unstable pubctl.ts build finalize --publ=${hc.command.publ.identity} --schedule="@publish" --tx-id="$PUBCTL_TXID" --observability-hugo-results-file="$HUGO_BUILD_RESULTS_FILE" --verbose
 mkdir -p ${observabilityHtmlDestHomeRel}
 cp "$HUGO_BUILD_RESULTS_FILE" ${observabilityHtmlDestHomeRel}
 echo "Hugo build results in ${observabilityHtmlDestHomeRel}/${buildResultsFile}"
@@ -154,9 +154,9 @@ PORT=${hc.container.pco.hugoServerPort ||
 function regenerate {
   if [[ "$REGENERATE" -eq 1 ]]; then
     echo "Regenerating content and re-initializing Hugo config"
-    ./pubctl.ts hugo clean --tx-id="$PUBCTL_TXID"
-    ./pubctl.ts generate --schedule="@publish" --tx-id="$PUBCTL_TXID" --verbose
-    ./pubctl.ts hugo init --publ=${hc.command.publ.identity}${
+    deno run -A --unstable pubctl.ts hugo clean --tx-id="$PUBCTL_TXID"
+    deno run -A --unstable pubctl.ts generate --schedule="@publish" --tx-id="$PUBCTL_TXID" --verbose
+    deno run -A --unstable pubctl.ts hugo init --publ=${hc.command.publ.identity}${
       hc.container.pco.customModules.map((cm) => `--module=${cm}`).join(" ")
     } --tx-id="$PUBCTL_TXID" --verbose
   else
@@ -180,16 +180,16 @@ esac
 case $SERVER in
     hugo)
       regenerate
-      ./pubctl.ts build prepare --schedule="@publish" --tx-id="$PUBCTL_TXID" --verbose
+      deno run -A --unstable pubctl.ts build prepare --schedule="@publish" --tx-id="$PUBCTL_TXID" --verbose
       hugo server --config hugo-config.auto.toml --renderToDisk public --port $PORT --templateMetrics --templateMetricsHints
     ;;
 
     file)
       regenerate
-      ./pubctl.ts build prepare --publ=${hc.command.publ.identity} --schedule="@publish" --tx-id="$PUBCTL_TXID" --verbose
+      deno run -A --unstable pubctl.ts build prepare --publ=${hc.command.publ.identity} --schedule="@publish" --tx-id="$PUBCTL_TXID" --verbose
       mkdir -p ${observabilitySrcHomeRel}
       hugo --config ${hugoConfig.hugoConfigFileName} --templateMetrics --templateMetricsHints > "$HUGO_BUILD_RESULTS_FILE"
-      ./pubctl.ts build finalize --publ=${hc.command.publ.identity} --schedule="@publish" --tx-id="$PUBCTL_TXID" --observability-hugo-results-file="$HUGO_BUILD_RESULTS_FILE" --verbose
+      deno run -A --unstable pubctl.ts build finalize --publ=${hc.command.publ.identity} --schedule="@publish" --tx-id="$PUBCTL_TXID" --observability-hugo-results-file="$HUGO_BUILD_RESULTS_FILE" --verbose
       mkdir -p ${observabilityHtmlDestHomeRel}
       cp "$HUGO_BUILD_RESULTS_FILE" ${observabilityHtmlDestHomeRel}
       echo "Hugo build results in ${observabilityHtmlDestHomeRel}/${buildResultsFile}"
