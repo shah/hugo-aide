@@ -705,6 +705,9 @@ export class PublicationsController
     const dialect = gsm.prometheusDialect();
     const exported = dialect.export(this.pco.metrics.instances);
     if (exported.length > 0) {
+      Deno.mkdirSync(path.dirname(this.pco.observabilityPromMetricsFile), {
+        recursive: true,
+      });
       await Deno.writeTextFile(
         this.pco.observabilityPromMetricsFile,
         exported.join("\n") + "\n",
@@ -1051,9 +1054,13 @@ export class PublicationsController
       details: this.serviceHealthComponents(publ).details,
       version: await determineVersion(import.meta.url),
     });
+    Deno.mkdirSync(path.dirname(this.pco.observabilityHealthFile), {
+      recursive: true,
+    });
     Deno.writeTextFileSync(
       this.pco.observabilityHealthFile,
       JSON.stringify(unhealthy, undefined, "  "),
+      {},
     );
     if (this.pco.isVerbose) {
       console.log(
@@ -1143,6 +1150,12 @@ export class PublicationsController
           JSON.stringify(hugoBuildResults.buildTimeMS),
         ],
       });
+      Deno.mkdirSync(
+        path.dirname(this.pco.observabilityHugoTemplateMetricsCsvFile),
+        {
+          recursive: true,
+        },
+      );
       await Deno.writeTextFile(
         this.pco.observabilityHugoTemplateMetricsCsvFile,
         csvRows.join("\n"),
@@ -1164,6 +1177,9 @@ export class PublicationsController
         hugoBuildResults,
       ).details,
       version: await determineVersion(import.meta.url),
+    });
+    Deno.mkdirSync(path.dirname(this.pco.observabilityHealthFile), {
+      recursive: true,
     });
     Deno.writeTextFileSync(
       this.pco.observabilityHealthFile,
