@@ -809,7 +809,7 @@ export class PublicationsController
     this.execInfoMetricInstanceCommand(HookLifecycleStep.HUGO_CLEAN);
     await this.clean();
     await this.executeHooks({ proxyCmd: HookLifecycleStep.HUGO_CLEAN });
-    const hugoModClean = this.reportShellCmd(`hugox mod clean --all`);
+    const hugoModClean = this.reportShellCmd(`hugo mod clean --all`);
     await shell.runShellCommand(hugoModClean, {
       ...(this.pco.isVerbose
         ? shell.cliVerboseShellOutputOptions
