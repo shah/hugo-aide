@@ -148,8 +148,9 @@ if [ -z "$SERVER" ]; then
     exit -1
 fi
 REGENERATE=0
-PORT=\${PUBCTL_EXPERIMENT_PORT:-${hc.container.pco.hugoServerPort ||
+PORT=\${PUBCTL_PORT:-${hc.container.pco.hugoServerPort ||
       "hugoServerPort not in hc.container.pco"}}
+HOST=\${PUBCTL_HOST:-localhost}
 
 function regenerate {
   if [[ "$REGENERATE" -eq 1 ]]; then
@@ -194,7 +195,7 @@ case $SERVER in
       cp "$HUGO_BUILD_RESULTS_FILE" ${observabilityHtmlDestHomeRel}
       echo "Hugo build results in ${observabilityHtmlDestHomeRel}/${buildResultsFile}"
       echo "Serving files in '${htmlDestHomeRel}'"
-      deno run -A --unstable https://deno.land/std@0.86.0/http/file_server.ts ${htmlDestHomeRel} --port $PORT --host localhost
+      deno run -A --unstable https://deno.land/std@0.86.0/http/file_server.ts ${htmlDestHomeRel} --port $PORT --host $HOST
     ;;
 
     *)
