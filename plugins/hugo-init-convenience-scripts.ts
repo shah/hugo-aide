@@ -148,11 +148,8 @@ if [ -z "$SERVER" ]; then
     exit -1
 fi
 REGENERATE=0
-PORT=${
-      "hugoServerPort" in hc.container.pco
-        ? hc.container.pco["hugoServerPort"]
-        : "hugoServerPort not in hc.container.pco"
-    }
+PORT=${hc.container.pco.hugoServerPort ||
+      "hugoServerPort not in hc.container.pco"}
 
 function regenerate {
   if [[ "$REGENERATE" -eq 1 ]]; then

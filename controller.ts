@@ -300,6 +300,7 @@ export interface PublicationsControllerOptions {
   readonly observabilityHugoBuildResultsFile: string;
   readonly observabilityHugoTemplateMetricsCsvFile: string;
   readonly observabilityHealthFile: string;
+  readonly hugoServerPort?: number;
 }
 
 export function publicationsControllerOptions(
