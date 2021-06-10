@@ -248,7 +248,7 @@ export function defaultPubCtlHookSync<
 export function defaultPubCtlHookResultEnhancer<
   PC extends PublicationsController,
 >(
-  hc: HookContext<PC>,
+  _hc: HookContext<PC>,
   dfmhResult?: ex.DenoFunctionModuleHandlerResult,
 ): ex.DenoFunctionModuleHandlerResult {
   if (!dfmhResult) return {};
@@ -448,7 +448,7 @@ export class PublicationsControllerPluginsManager<
       projectPath: pco.projectHome,
       destPath: pco.projectHome,
       dryRun: pco.isDryRun,
-      report: (ctx, ph, result) => {
+      report: (_ctx, _ph, result) => {
         console.log(
           "Created",
           colors.yellow(
@@ -683,7 +683,7 @@ export class PublicationsController
   }
 
   async finalizeController<C extends PublicationsController>(
-    handledBy?: PublicationsControllerCommandHandler<C>,
+    _handledBy?: PublicationsControllerCommandHandler<C>,
   ): Promise<void> {
     // if we had a command working tracking, then record the metrics
     if (this.execInfoInstance.labels.object.command) {
@@ -760,7 +760,7 @@ export class PublicationsController
 
   publication(
     publ: p.Identity,
-    customModules?: p.PublicationModuleIdentity[],
+    _customModules?: p.PublicationModuleIdentity[],
   ): p.Publication | undefined {
     // customModules are usually handled by their publications but available
     // here in case it's necessary
