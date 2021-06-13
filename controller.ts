@@ -42,6 +42,7 @@ export interface CommandHandlerCaller {
   readonly calledFromMain: boolean;
   readonly version: string;
   readonly projectHome?: string;
+  readonly docOptInitArgV?: string[];
 }
 
 export function defaultDocoptSpec(caller: CommandHandlerCaller): string {
@@ -1560,7 +1561,14 @@ export async function CLI<
     const docoptSpecFn = options.docoptSpec || defaultDocoptSpec;
     const prepareControllerOptions = options.prepareControllerOptions ||
       publicationsControllerOptions;
-    const cliArgs = docopt.default(docoptSpecFn(caller));
+    const cliArgs = docopt.default(
+      docoptSpecFn(caller),
+      caller.docOptInitArgV
+        ? {
+          argv: caller.docOptInitArgV,
+        }
+        : undefined,
+    );
     const pchOptions = prepareControllerOptions(caller, cliArgs);
     const context = prepareController
       ? prepareController(caller, cliArgs, pchOptions)
