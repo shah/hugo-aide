@@ -195,7 +195,7 @@ case $SERVER in
       cp "$HUGO_BUILD_RESULTS_FILE" ${observabilityHtmlDestHomeRel}
       echo "Hugo build results in ${observabilityHtmlDestHomeRel}/${buildResultsFile}"
       echo "Serving files in '${htmlDestHomeRel}'"
-      denoStdLibVersion=`curl -s https://api.github.com/repos/denoland/deno_std/releases | jq '.[0].name' -r`
+      denoStdLibVersion=\`curl -s https://api.github.com/repos/denoland/deno_std/releases | jq '.[0].name' -r\`
       deno run -A --unstable https://deno.land/std@${denoStdLibVersion}/http/file_server.ts ${htmlDestHomeRel} --port $PORT --host $HOST
     ;;
 
