@@ -1065,7 +1065,7 @@ export class PublicationsController
     );
     if (this.pco.isVerbose) {
       console.log(
-        `Stored initial unhealth service status in ${
+        `Stored initial unhealthy service status in ${
           colors.yellow(this.pco.observabilityHealthFile)
         }`,
       );
