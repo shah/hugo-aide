@@ -2,7 +2,7 @@ import * as colors from "https://deno.land/std@0.98.0/fmt/colors.ts";
 import * as docopt from "https://denopkg.com/Eyal-Shalev/docopt.js@v1.0.7/src/docopt.ts";
 import * as path from "https://deno.land/std@0.98.0/path/mod.ts";
 import * as uuid from "https://deno.land/std@0.93.0/uuid/mod.ts";
-import * as ha from "./mod.ts";
+import * as ctl from "./controller.ts";
 import "https://deno.land/x/dotenv@v2.0.0/load.ts"; // automatically load .env into environment
 
 const orchestrationCmd = path.basename(import.meta.url);
@@ -75,7 +75,7 @@ export function isOrchestrationCliRequest(): boolean {
 }
 
 export async function orchestrationCLI(
-  wrapCLI: ha.ControllerCommandLineInterface,
+  wrapCLI: ctl.ControllerCommandLineInterface,
 ): Promise<void> {
   const pubCtlCLI: (argV: string[]) => Promise<void> = async (
     argV: string[],
