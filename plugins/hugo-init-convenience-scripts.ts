@@ -148,8 +148,7 @@ if [ -z "$SERVER" ]; then
     exit -1
 fi
 REGENERATE=0
-PORT=\${PUBCTL_PORT:-${hc.container.pco.hugoServerPort ||
-      "hugoServerPort not in hc.container.pco"}}
+PORT=\${PUBCTL_PORT:-3100}
 HOST=\${PUBCTL_HOST:-localhost}
 
 function regenerate {
