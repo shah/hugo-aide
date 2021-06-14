@@ -1550,6 +1550,10 @@ export interface CommandHandlerSpecOptions<C extends PublicationsController> {
   ) => C;
 }
 
+export interface ControllerCommandLineInterface {
+  (caller: CommandHandlerCaller): Promise<void>;
+}
+
 export async function CLI<
   C extends PublicationsController,
 >(
