@@ -181,7 +181,7 @@ esac
 case $SERVER in
     hugo)
       regenerate
-      deno run -A --unstable pubctl.ts build prepare --schedule="@publish" --tx-id="$PUBCTL_TXID" --verbose
+      deno run -A --unstable pubctl.ts build prepare --publ=${hc.command.publ.identity} --schedule="@publish" --tx-id="$PUBCTL_TXID" --verbose
       hugo server --config hugo-config.auto.toml --renderToDisk public --port $PORT --templateMetrics --templateMetricsHints
     ;;
 
