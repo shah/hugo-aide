@@ -2,7 +2,6 @@ import { colors, docopt, path, uuid } from "./deps.ts";
 import * as ctl from "./controller.ts";
 import "https://deno.land/x/dotenv@v2.0.0/load.ts"; // automatically load .env into environment
 
-const orchestrationCmd = path.basename(import.meta.url);
 const orchestrationVersion = "0.9.0";
 enum OrchestrationNature {
   experiment = "experiment",
@@ -21,15 +20,18 @@ interface OrchestrationCliArguments {
   hugoBuildResultsFileName: string;
 }
 
-function prepareOrchestrationArgs(): OrchestrationCliArguments {
+function prepareOrchestrationArgs(
+  caller: ctl.CommandHandlerCaller,
+): OrchestrationCliArguments {
   try {
+    const cmd = path.basename(caller.calledFromMetaURL);
     const cliArgs = docopt.default(`
 Publication Controller Orchestrator ${orchestrationVersion}.
 
 Usage:
-  ${orchestrationCmd} experiment (hugo|file) [--publ=<publ-id>] [--regenerate] [--verbose] [--hugo-build-results=<file>]
-  ${orchestrationCmd} publish [--publ=<publ-id>] [--verbose] [--hugo-build-results=<file>]
-  ${orchestrationCmd} -h | --help
+  ${cmd} experiment (hugo|file) [--publ=<publ-id>] [--regenerate] [--verbose] [--hugo-build-results=<file>]
+  ${cmd} publish [--publ=<publ-id>] [--verbose] [--hugo-build-results=<file>]
+  ${cmd} -h | --help
 
 Options:
   --publ=<publ-id>             A publication configuration supplier name [default: sandbox]
@@ -87,8 +89,9 @@ export async function orchestrationCLI(
       docOptInitArgV: argV,
     });
     if (cliArgs.verbose) {
+      const cmd = path.basename(caller.calledFromMetaURL);
       console.log(
-        colors.green(orchestrationCmd),
+        colors.green(cmd),
         colors.green(caller.docOptInitArgV!.join(" ")),
       );
     }
@@ -99,7 +102,11 @@ export async function orchestrationCLI(
   const host = Deno.env.get("PUBCTL_HOST");
   const txID = uuid.v4.generate();
 
-  const cliArgs = prepareOrchestrationArgs();
+  const cliArgs = prepareOrchestrationArgs(constructCaller({
+    calledFromMain: import.meta.main,
+    calledFromMetaURL: import.meta.url,
+    version: orchestrationVersion,
+  }));
   const verboseArg = cliArgs.verbose ? ["--verbose"] : [];
   const txArg = ["--tx-id", txID];
   const scheduleTxArgs = ["--schedule", `@${cliArgs.orchestration}`, ...txArg];

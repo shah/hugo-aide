@@ -59,27 +59,28 @@ export function defaultDocoptSpec(caller: CommandHandlerCaller): string {
   const transactionID = "[--tx-id=<uuid>]";
   const stdArgs =
     `${targetable} ${transactionID} ${paths} ${hookable} ${observable} ${customizable}`;
+  const cmd = path.basename(caller.calledFromMetaURL);
   return `
-Publication Orchestrator ${caller.version}.
+Publication Controller ${caller.version}.
 
 Usage:
-  pubctl init workspace ${stdArgs}
-  pubctl hugo init ${targetable} ${publ} [--dest=<dest>] ${transactionID} ${paths} ${hookable} ${observable} ${customizable}
-  pubctl hugo inspect ${targetable} ${transactionID} ${paths} ${hookable} ${customizable}
-  pubctl hugo clean ${targetable} ${transactionID} ${paths} ${hookable} ${customizable}
-  pubctl observability clean ${targetable} ${transactionID} ${paths} ${hookable} ${observable} ${customizable}
-  pubctl install ${stdArgs}
-  pubctl validate hooks ${stdArgs}
-  pubctl describe ${targetable} ${transactionID} ${paths} ${hookable} ${customizable}
-  pubctl inspect (publications | publishable-modules | ${targetable}) ${transactionID} ${paths} ${hookable} ${customizable}
-  pubctl build prepare ${targetable} ${publ} ${schedulable} ${transactionID} ${healthResults} ${paths} ${hookable} ${observable} ${customizable}
-  pubctl build finalize ${targetable} ${publ} ${schedulable} ${transactionID} ${healthResults} ${hugoResults} ${paths} ${hookable} ${observable} ${customizable}
-  pubctl generate ${targetable} ${schedulable} ${transactionID} ${paths} ${hookable} ${observable} ${customizable}
-  pubctl clean ${stdArgs}
-  pubctl doctor ${stdArgs}
-  pubctl update ${stdArgs}
-  pubctl version
-  pubctl -h | --help
+  ${cmd} init workspace ${stdArgs}
+  ${cmd} hugo init ${targetable} ${publ} [--dest=<dest>] ${transactionID} ${paths} ${hookable} ${observable} ${customizable}
+  ${cmd} hugo inspect ${targetable} ${transactionID} ${paths} ${hookable} ${customizable}
+  ${cmd} hugo clean ${targetable} ${transactionID} ${paths} ${hookable} ${customizable}
+  ${cmd} observability clean ${targetable} ${transactionID} ${paths} ${hookable} ${observable} ${customizable}
+  ${cmd} install ${stdArgs}
+  ${cmd} validate hooks ${stdArgs}
+  ${cmd} describe ${targetable} ${transactionID} ${paths} ${hookable} ${customizable}
+  ${cmd} inspect (publications | publishable-modules | ${targetable}) ${transactionID} ${paths} ${hookable} ${customizable}
+  ${cmd} build prepare ${targetable} ${publ} ${schedulable} ${transactionID} ${healthResults} ${paths} ${hookable} ${observable} ${customizable}
+  ${cmd} build finalize ${targetable} ${publ} ${schedulable} ${transactionID} ${healthResults} ${hugoResults} ${paths} ${hookable} ${observable} ${customizable}
+  ${cmd} generate ${targetable} ${schedulable} ${transactionID} ${paths} ${hookable} ${observable} ${customizable}
+  ${cmd} clean ${stdArgs}
+  ${cmd} doctor ${stdArgs}
+  ${cmd} update ${stdArgs}
+  ${cmd} version
+  ${cmd} -h | --help
 
 Options:
   <target>                                One or more identifiers that the hook will understand
