@@ -103,10 +103,7 @@ export interface SitePublControllerOptions
   readonly hugoConfigFileName: string;
   readonly hugoModulePrimeName: string;
   readonly publishableModules: SitePublishableModules;
-  readonly mGitWorkspacesHomeRelativeToProjectDir: string;
-  readonly mGitWorkspacesHomeRelativeToThemesDir: string;
   readonly observabilityHookShellScript: string;
-  readonly mGitWorkspacesHomeRelativeToObservabilityDir: string;
   readonly projectHomeRelativeToObservabilityDir: string;
   readonly siteHugoConfig: (
     modules: SitePublicationModule[],
@@ -120,16 +117,6 @@ export function sitePublControllerOptions(
   inherit: ctl.PublicationsControllerOptions,
 ): SitePublControllerOptions {
   // TODO update to get this from CLI or environment variable
-  const mgGitWorkspacesHome = path.join(Deno.env.get("HOME")!, "/workspaces");
-  const mGitWorkspacesHomeRelativeToProjectDir = path.relative(
-    inherit.projectHome,
-    mgGitWorkspacesHome,
-  );
-  // TODO update to get this from CLI or environment variable
-  const mGitWorkspacesHomeRelativeToThemesDir = path.relative(
-    path.resolve(inherit.projectHome, "./themes"),
-    mgGitWorkspacesHome,
-  );
   const requiredModules = [
     netspectiveSalesforceLightningThemeModule(),
     shortcodeNsModule("hugo-shortcode-diagram"),
@@ -145,16 +132,9 @@ export function sitePublControllerOptions(
     },
     hugoConfigFileName: "hugo-config.auto.toml",
     hugoModulePrimeName: "site",
-    mGitWorkspacesHomeRelativeToProjectDir,
-    mGitWorkspacesHomeRelativeToThemesDir,
     observabilityHookShellScript: path.resolve(
       inherit.observabilitySrcHome,
       "publication-observability.hook-pubctl.sh",
-    ),
-    // TODO update to get this from CLI or environment variable
-    mGitWorkspacesHomeRelativeToObservabilityDir: path.relative(
-      inherit.observabilitySrcHome,
-      mgGitWorkspacesHome,
     ),
     projectHomeRelativeToObservabilityDir: path.relative(
       inherit.observabilitySrcHome,
