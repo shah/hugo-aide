@@ -14,7 +14,8 @@ enum OrchestrationServerNature {
 interface OrchestrationCliArguments {
   orchestration: OrchestrationNature;
   server: OrchestrationServerNature;
-  regenerate: boolean;
+  initConfig: boolean;
+  generateContent: boolean;
   verbose: boolean;
   publID: string;
   hugoBuildResultsFileName: string;
@@ -29,7 +30,7 @@ function prepareOrchestrationArgs(
 Publication Controller Orchestrator ${orchestrationVersion}.
 
 Usage:
-  ${cmd} experiment (hugo|file) [--publ=<publ-id>] [--regenerate] [--verbose] [--hugo-build-results=<file>]
+  ${cmd} experiment (hugo|file) [--publ=<publ-id>] [--init-config] [--generate-content] [--verbose] [--hugo-build-results=<file>]
   ${cmd} publish [--publ=<publ-id>] [--verbose] [--hugo-build-results=<file>]
   ${cmd} -h | --help
 
@@ -49,9 +50,12 @@ Options:
           ? OrchestrationServerNature.hugo
           : OrchestrationServerNature.file)
         : OrchestrationServerNature.file,
-      regenerate: orchestration == OrchestrationNature.experiment
-        ? (cliArgs["--regenerate"] ? true : false)
-        : true,
+      initConfig: orchestration == OrchestrationNature.experiment
+        ? (cliArgs["--init-config"] ? true : false)
+        : true, // always re-init if publishing
+      generateContent: orchestration == OrchestrationNature.experiment
+        ? (cliArgs["--generate-content"] ? true : false)
+        : true, // always re-init if publishing
       verbose: cliArgs["--verbose"] ? true : false,
       publID: cliArgs["--publ"]!.toString(), // default is set by docopt
       hugoBuildResultsFileName: cliArgs["--hugo-build-results"]!.toString(), // default is set by docopt
@@ -112,16 +116,24 @@ export async function orchestrationCLI(
   const scheduleTxArgs = ["--schedule", `@${cliArgs.orchestration}`, ...txArg];
   const publArgs = ["--publ", cliArgs.publID];
 
-  if (cliArgs.regenerate) {
+  if (cliArgs.initConfig) {
     // deno run -A --unstable pubctl.ts hugo clean --tx-id="$PUBCTL_TXID"
     await pubCtlCLI(["hugo", "clean", ...txArg]);
-
-    // deno run -A --unstable pubctl.ts generate --schedule="@publish" --tx-id="$PUBCTL_TXID" --verboseArg
-    await pubCtlCLI(["generate", ...scheduleTxArgs, ...verboseArg]);
 
     // deno run -A --unstable pubctl.ts hugo init --publ=sandbox --tx-id="$PUBCTL_TXID" --verboseArg
     // deno-fmt-ignore
     await pubCtlCLI(["hugo", "init", ...publArgs, ...txArg, ...verboseArg]);
+
+    const hugoModVendor = Deno.run({
+      cmd: ["hugo", "mod", "vendor", "--config", "hugo-config.auto.toml"],
+    });
+    await hugoModVendor.status();
+    hugoModVendor.close();
+  }
+
+  if (cliArgs.generateContent) {
+    // deno run -A --unstable pubctl.ts generate --schedule="@publish" --tx-id="$PUBCTL_TXID" --verboseArg
+    await pubCtlCLI(["generate", ...scheduleTxArgs, ...verboseArg]);
   }
 
   // deno run -A --unstable pubctl.ts build prepare --publ=sandbox --schedule="@publish" --tx-id="$PUBCTL_TXID" --verboseArg
@@ -148,6 +160,7 @@ export async function orchestrationCLI(
   const hugoBuildResultsFileOrig =
     `static/.observability/${cliArgs.hugoBuildResultsFileName}`;
   Deno.writeFileSync(hugoBuildResultsFileOrig, await hugo.output());
+  hugo.close();
 
   // deno run -A --unstable pubctl.ts build finalize --publ=sandbox --schedule="@publish" --tx-id="$PUBCTL_TXID" --observability-hugo-results-file="$hugoBuildResultsFileOrig" --verboseArg
   // deno-fmt-ignore
