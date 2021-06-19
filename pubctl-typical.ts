@@ -4,6 +4,7 @@ import "https://deno.land/x/dotenv@v2.0.0/load.ts"; // automatically load .env i
 import * as ctl from "./controller.ts";
 import * as publ from "./publication.ts";
 import * as hc from "./hugo-config.ts";
+import * as hicsp from "./plugins/hugo-init-convenience-scripts.ts";
 
 /**
  * SiteModuleConfigOptions provides Hugo configuration properties whose values
@@ -257,6 +258,10 @@ export class SitePublController extends ctl.PublicationsController {
     readonly spco: SitePublControllerOptions,
   ) {
     super(cli, spco);
+    this.pluginsMgr.registerValidPlugin({
+      plugin: hicsp.pubCtlHook,
+      source: hicsp.pubCtlHook.source,
+    });
     const baseUrlFromEnv = Deno.env.get(
       spco.experimentalPubl.baseUrlEnvVarName,
     );
