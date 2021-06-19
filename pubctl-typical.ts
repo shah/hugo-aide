@@ -4,7 +4,6 @@ import "https://deno.land/x/dotenv@v2.0.0/load.ts"; // automatically load .env i
 import * as ctl from "./controller.ts";
 import * as publ from "./publication.ts";
 import * as hc from "./hugo-config.ts";
-import * as hicsp from "./plugins/hugo-init-convenience-scripts.ts";
 
 /**
  * SiteModuleConfigOptions provides Hugo configuration properties whose values
@@ -14,7 +13,8 @@ import * as hicsp from "./plugins/hugo-init-convenience-scripts.ts";
  * it's supplied through SiteHugoConfigOptions.
  */
 // deno-lint-ignore no-empty-interface
-export interface SiteModuleConfigOptions {
+export interface SiteModuleConfigOptions
+  extends ctl.PublicationModuleImportOptions {
 }
 
 // deno-lint-ignore no-empty-interface
@@ -36,6 +36,41 @@ export interface SitePresentationContentGenerator
 export interface SiteStaticContentModule extends SitePublicationModule {
 }
 
+/**
+ * Looks for findPath in startPath and all ancestors, returning the first one found
+ * @param findPath the relative path to search for starting in startPath and all ancestors
+ * @param startPath the starting path to search for findPath
+ * @param returnPath return value function based on whether the path was found or not
+ * @returns result of returnPath()
+ */
+export function findPathInAncestors(
+  findPath: string,
+  startPath: string,
+  returnPath: (found?: string) => string | undefined = (found?) => {
+    console.log("findPathInAncestors.returnPath", findPath, startPath, found);
+    return found ? path.relative(startPath, found) : undefined;
+  },
+): string | undefined {
+  // first check the starting path and see if it's in there
+  const foundInStartPath = path.join(startPath, findPath);
+  if (fs.existsSync(foundInStartPath)) {
+    return returnPath(foundInStartPath);
+  }
+  // now look through each parent of startPath until findPath is found or paths exhausted
+  const ancestors = startPath.split(path.SEP);
+  for (let a = 1; a < ancestors.length; a++) {
+    const searchPath = path.join(
+      startPath,
+      ...Array(a).fill(".."),
+      findPath,
+    );
+    if (fs.existsSync(searchPath)) {
+      return returnPath(searchPath);
+    }
+  }
+  return returnPath(undefined);
+}
+
 const netspectiveSalesforceLightningThemeSourceRepoPath =
   "github.com/netspective-studios/hugo-theme-sf-lightning";
 
@@ -44,9 +79,11 @@ export function netspectiveSalesforceLightningThemeModule(): SiteStaticContentMo
     identity: "theme-netspective-slds",
     // the theme includes sample content and other data but we're only
     // using assets, layouts, and static
-    mergeHugoModuleImports: () => {
+    mergeHugoModuleImports: (smco) => {
       return [{
-        path: netspectiveSalesforceLightningThemeSourceRepoPath,
+        path: smco.publModuleImportRepoPath(
+          netspectiveSalesforceLightningThemeSourceRepoPath,
+        ),
         mounts: [{
           source: "assets",
           target: `assets`,
@@ -68,9 +105,9 @@ export function shortcodeNsModule(
 ): SiteStaticContentModule {
   return {
     identity: `site-${identity}`,
-    mergeHugoModuleImports: () => {
+    mergeHugoModuleImports: (smco) => {
       return [{
-        path: repoPath,
+        path: smco.publModuleImportRepoPath(repoPath),
         mounts: [{
           source: "shortcodes",
           target: `layouts/shortcodes`,
@@ -93,7 +130,9 @@ export interface SiteProductionPublOptions {
 }
 
 export interface SitePublControllerOptions
-  extends ctl.PublicationsControllerOptions {
+  extends
+    ctl.PublicationsControllerOptions,
+    ctl.PublicationModuleImportOptions {
   readonly productionPubl: SiteProductionPublOptions;
   readonly experimentalPubl: {
     readonly serverPortEnvVarName: string;
@@ -105,6 +144,7 @@ export interface SitePublControllerOptions
   readonly publishableModules: SitePublishableModules;
   readonly observabilityHookShellScript: string;
   readonly projectHomeRelativeToObservabilityDir: string;
+  readonly publModuleImportRepoPathsCache: Map<string, string>;
   readonly siteHugoConfig: (
     modules: SitePublicationModule[],
     mmco: SiteModuleConfigOptions,
@@ -122,7 +162,7 @@ export function sitePublControllerOptions(
     shortcodeNsModule("hugo-shortcode-diagram"),
     shortcodeNsModule("hugo-shortcode-badge"),
   ];
-  return {
+  const spco: SitePublControllerOptions = {
     ...inherit,
     productionPubl,
     experimentalPubl: {
@@ -150,7 +190,9 @@ export function sitePublControllerOptions(
       return {
         defaultContentLanguage: "en",
         languageCode: "en-us",
-        theme: netspectiveSalesforceLightningThemeSourceRepoPath,
+        theme: spco.publModuleImportRepoPath(
+          netspectiveSalesforceLightningThemeSourceRepoPath,
+        ),
         markup: {
           defaultMarkdownHandler: "goldmark",
           goldmark: { renderer: { unsafe: true } },
@@ -172,7 +214,35 @@ export function sitePublControllerOptions(
         taxonomies: { ...merged.taxonomies },
       };
     },
+    publModuleImportRepoPathsCache: new Map<string, string>(),
+    publModuleImportRepoPath: (
+      toPath: string,
+      relTo?: "project" | string,
+    ): string => {
+      const inCache = spco.publModuleImportRepoPathsCache.get(toPath);
+      if (inCache) return inCache;
+
+      // look for the module import repo in projectHome and all ancestors;
+      // if not found just use toPath; if found, make it relative to project or
+      // given relTo
+      const fromPath = path.join(inherit.projectHome, "themes");
+      const found = findPathInAncestors(
+        toPath,
+        fromPath,
+        (found?) => {
+          return found
+            ? path.relative(
+              (relTo == "project" ? inherit.projectHome : relTo) ?? fromPath,
+              found,
+            )
+            : toPath;
+        },
+      )!; // should never be undefined based on our code above
+      spco.publModuleImportRepoPathsCache.set(toPath, found);
+      return found;
+    },
   };
+  return spco;
 }
 
 export interface SiteSandboxPublicationOptions {
@@ -184,55 +254,51 @@ export interface SiteSandboxPublicationOptions {
 export class SitePublController extends ctl.PublicationsController {
   constructor(
     readonly cli: ctl.CliArgsSupplier,
-    readonly mpco: SitePublControllerOptions,
+    readonly spco: SitePublControllerOptions,
   ) {
-    super(cli, mpco);
-    this.pluginsMgr.registerValidPlugin({
-      plugin: hicsp.pubCtlHook,
-      source: hicsp.pubCtlHook.source,
-    });
+    super(cli, spco);
     const baseUrlFromEnv = Deno.env.get(
-      mpco.experimentalPubl.baseUrlEnvVarName,
+      spco.experimentalPubl.baseUrlEnvVarName,
     );
-    const hostfromEnv = Deno.env.get(mpco.experimentalPubl.hostEnvVarName);
+    const hostfromEnv = Deno.env.get(spco.experimentalPubl.hostEnvVarName);
     const sites: hc.HugoPublication<SiteModuleConfigOptions>[] = [
       {
         identity: "sandbox",
-        hugoModuleName: this.mpco.hugoModulePrimeName,
+        hugoModuleName: this.spco.hugoModulePrimeName,
         hugoConfigSupplier: () =>
           this.sandboxPublisherConfig({
-            modules: this.mpco.publishableModules.allModules,
+            modules: this.spco.publishableModules.allModules,
             baseURL: baseUrlFromEnv ? baseUrlFromEnv : (`http://${hostfromEnv ||
               "localhost"}:${Deno.env.get(
-                mpco.experimentalPubl.serverPortEnvVarName,
+                spco.experimentalPubl.serverPortEnvVarName,
               ) ?? 3100}`),
-            title: `${this.mpco.productionPubl.title} (Sandbox)`,
+            title: `${this.spco.productionPubl.title} (Sandbox)`,
           }),
       },
       {
         identity: "production",
-        hugoModuleName: this.mpco.hugoModulePrimeName,
+        hugoModuleName: this.spco.hugoModulePrimeName,
         hugoConfigSupplier: () => this.productionPublisherConfig(),
       },
     ];
     sites.forEach((pdo) => this.publications[pdo.identity] = pdo);
-    this.publModules.push(...this.mpco.publishableModules.allModules);
+    this.publModules.push(...this.spco.publishableModules.allModules);
   }
 
   productionPublisherConfig(): SitePublicationHugoConfigurationSupplier {
     return {
-      hugoConfigFileName: this.mpco.hugoConfigFileName,
+      hugoConfigFileName: this.spco.hugoConfigFileName,
       hugoConfig: {
         ...hc.typicalHugoConfig,
-        baseURL: this.mpco.productionPubl.baseURL,
-        title: this.mpco.productionPubl.title,
-        ...this.mpco.siteHugoConfig(
-          this.mpco.publishableModules.allModules,
-          {},
+        baseURL: this.spco.productionPubl.baseURL,
+        title: this.spco.productionPubl.title,
+        ...this.spco.siteHugoConfig(
+          this.spco.publishableModules.allModules,
+          { publModuleImportRepoPath: this.spco.publModuleImportRepoPath },
         ),
       },
       hugoConfigModules: () => {
-        return this.mpco.publishableModules.allModules;
+        return this.spco.publishableModules.allModules;
       },
     };
   }
@@ -242,12 +308,14 @@ export class SitePublController extends ctl.PublicationsController {
   ): SitePublicationHugoConfigurationSupplier {
     const { modules, baseURL, title } = sbo;
     return {
-      hugoConfigFileName: this.mpco.hugoConfigFileName,
+      hugoConfigFileName: this.spco.hugoConfigFileName,
       hugoConfig: {
         ...hc.typicalHugoConfig,
         baseURL: baseURL,
         title: title,
-        ...this.mpco.siteHugoConfig(modules, {}),
+        ...this.spco.siteHugoConfig(modules, {
+          publModuleImportRepoPath: this.spco.publModuleImportRepoPath,
+        }),
       },
       hugoConfigModules: () => {
         return modules;
@@ -280,12 +348,14 @@ export class SitePublController extends ctl.PublicationsController {
     // Before it runs, we need to update the script with all the paths that
     // make up the Hugo build so that observability metrics are run only for
     // the imported modules.
-    const { observabilityHookShellScript } = this.mpco;
+    const { observabilityHookShellScript } = this.spco;
     if (fs.existsSync(observabilityHookShellScript)) {
       const importPaths: string[] = [];
       const hcs = publ.hugoConfigSupplier(this);
       hcs.hugoConfigModules().forEach((mm) => {
-        mm.mergeHugoModuleImports({}).map((i) => {
+        mm.mergeHugoModuleImports({
+          publModuleImportRepoPath: this.spco.publModuleImportRepoPath,
+        }).map((i) => {
           // 'hugo-import' is the nature of the path (used for observability analytics)
           if (i.path) importPaths.push(`hugo-import ${i.path}`);
         });
@@ -296,7 +366,7 @@ export class SitePublController extends ctl.PublicationsController {
         // 'hugo-dest-html' is the nature of the path (used for observability analytics)
         `hugo-dest-html ${
           path.join(
-            this.mpco.projectHomeRelativeToObservabilityDir,
+            this.spco.projectHomeRelativeToObservabilityDir,
             "public",
           )
         }`,
@@ -313,7 +383,7 @@ export class SitePublController extends ctl.PublicationsController {
         console.log(
           "Updated",
           colors.yellow(
-            path.relative(this.mpco.projectHome, observabilityHookShellScript),
+            path.relative(this.spco.projectHome, observabilityHookShellScript),
           ),
           "with",
           colors.blue(importPaths.length.toString()),
@@ -329,11 +399,13 @@ export class SitePublController extends ctl.PublicationsController {
 
   async hugoInspect(): Promise<boolean> {
     console.log(colors.dim("Imported Hugo modules:"));
-    this.mpco.publishableModules.allModules.forEach((mm) => {
-      const required = this.mpco.publishableModules.requiredModules.find((rm) =>
+    this.spco.publishableModules.allModules.forEach((mm) => {
+      const required = this.spco.publishableModules.requiredModules.find((rm) =>
         rm.identity == mm.identity
       );
-      mm.mergeHugoModuleImports({}).map((i) => i.path).forEach((path) => {
+      mm.mergeHugoModuleImports({
+        publModuleImportRepoPath: this.spco.publModuleImportRepoPath,
+      }).map((i) => i.path).forEach((path) => {
         console.log(
           required
             ? `${colors.green(path || "??")} (always included)`

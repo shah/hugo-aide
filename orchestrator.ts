@@ -1,4 +1,4 @@
-import { colors, docopt, path, uuid } from "./deps.ts";
+import { colors, docopt, fs, path, uuid } from "./deps.ts";
 import * as ctl from "./controller.ts";
 import "https://deno.land/x/dotenv@v2.0.0/load.ts"; // automatically load .env into environment
 
@@ -129,6 +129,21 @@ export async function orchestrationCLI(
     });
     await hugoModVendor.status();
     hugoModVendor.close();
+    const vendoredModules = path.join("_vendor", "modules.txt");
+    if (fs.existsSync(vendoredModules)) {
+      const count =
+        Deno.readTextFileSync(vendoredModules).split("\n").filter((s) =>
+          s.trim().length > 0
+        ).length;
+      console.log(
+        colors.cyan(
+          `Vendored Hugo modules: ${colors.yellow(count.toString())}`,
+        ),
+      );
+    } else {
+      console.log(colors.red("No Hugo modules vendored"));
+      Deno.removeSync("_vendor");
+    }
   }
 
   if (cliArgs.generateContent) {
@@ -144,7 +159,7 @@ export async function orchestrationCLI(
     console.log(
       `${colors.green("Ready")}: ${
         colors.yellow(
-          `hugo server --config hugo-config.auto.toml --renderToDisk public --port ${port} --templateMetrics --templateMetricsHints`,
+          `hugo server --config hugo-config.auto.toml --renderToDisk public --port ${port}`,
         )
       }`,
     );
